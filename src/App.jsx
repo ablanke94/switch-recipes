@@ -45,21 +45,36 @@ import {
 } from 'lucide-react';
 
 // --- FIREBASE SETUP ---
+// We use a safe access pattern here to prevent crashes in the preview window
+// When you deploy to Vercel, 'import.meta.env' will be populated with your secrets.
+// We use a try-catch block for import.meta to handle environments where it might not be defined
+let env = {};
+try {
+  // eslint-disable-next-line no-undef
+  env = import.meta.env || {};
+} catch (e) {
+  console.warn("import.meta not available");
+}
+
 const firebaseConfig = {
-  apiKey: "AIzaSyAvO-hM3lnpoTUODUCvD2nzZUCzgeiNHCo",
-  authDomain: "switch-recipes.firebaseapp.com",
-  projectId: "switch-recipes",
-  // ⚠️ REPLACE THIS WITH YOUR BUCKET NAME FROM FIREBASE CONSOLE (Storage -> Files)
-  // It usually looks like 'switch-recipes.appspot.com' or 'switch-recipes.firebasestorage.app'
-  storageBucket: "switch-recipes.firebasestorage.app", 
-  messagingSenderId: "430127530890",
-  appId: "1:430127530890:web:b3bc426df11b082ef47e73"
+  apiKey: env.VITE_FIREBASE_API_KEY,
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: env.VITE_FIREBASE_APP_ID
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const storage = getStorage(app);
+// We wrap initialization in a check so the app doesn't crash if keys are missing (like in this preview)
+let app, auth, db, storage;
+if (firebaseConfig.apiKey) {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+  storage = getStorage(app);
+} else {
+  console.warn("Firebase keys are missing. This is expected in the preview window if you are using Secrets.");
+}
 
 // This stays hardcoded for your standalone app
 const appId = 'switch-bbq-tablet';
@@ -198,6 +213,7 @@ export default function KitchenApp() {
 
   // --- AUTH ---
   useEffect(() => {
+    if (!auth) return; // Guard for missing keys
     const initAuth = async () => {
        await signInAnonymously(auth);
     };
@@ -208,7 +224,7 @@ export default function KitchenApp() {
 
   // --- DATA SYNC ---
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return; // Guard for missing keys
 
     // 1. Fetch Recipes
     const qRecipes = query(
@@ -292,14 +308,14 @@ export default function KitchenApp() {
   };
 
   const uploadImage = async (file) => {
-    if (!file) return null;
+    if (!file || !storage) return null;
     const storageRef = ref(storage, `artifacts/${appId}/images/${Date.now()}_${file.name}`);
     await uploadBytes(storageRef, file);
     return await getDownloadURL(storageRef);
   };
 
   const handleSaveRecipe = async () => {
-    if (!formData.title) return;
+    if (!formData.title || !db) return;
     setIsUploading(true);
 
     try {
@@ -342,7 +358,7 @@ export default function KitchenApp() {
   };
 
   const handleDeleteRecipe = async (id) => {
-    if (window.confirm(t.confirmDelete)) {
+    if (window.confirm(t.confirmDelete) && db) {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'recipes', id));
       if (selectedRecipe?.id === id) setSelectedRecipe(null);
     }
@@ -449,6 +465,20 @@ export default function KitchenApp() {
       inst: recipe.instructionsEn || recipe.instructions || "",
     };
   };
+
+  if (!db) {
+      return (
+          <div className="flex flex-col items-center justify-center h-screen bg-slate-50 p-6 text-center">
+              <AlertTriangle className="text-orange-500 h-16 w-16 mb-4" />
+              <h1 className="text-2xl font-bold mb-2">Setup Required</h1>
+              <p className="max-w-md text-slate-600">
+                  The app is waiting for your Firebase keys. 
+                  <br/>
+                  If you are seeing this on <b>Vercel</b>, please go to Settings &rarr; Environment Variables and add your keys.
+              </p>
+          </div>
+      );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 w-full">
