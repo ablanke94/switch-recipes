@@ -514,7 +514,7 @@ export default function KitchenApp() {
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 w-full">
       
       {/* HEADER */}
-      <header className="bg-slate-900 text-white p-4 shadow-lg sticky top-0 z-10">
+      <header className="bg-slate-900 text-white p-4 shadow-lg sticky top-0 z-40">
         <div className="w-full px-4 md:px-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <ChefHat className="h-8 w-8 text-orange-400" />
