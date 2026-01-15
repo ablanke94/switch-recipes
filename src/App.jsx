@@ -45,35 +45,53 @@ import {
 } from 'lucide-react';
 
 // --- FIREBASE SETUP ---
-// We use a safe access pattern here to prevent crashes in the preview window
-// When you deploy to Vercel, 'import.meta.env' will be populated with your secrets.
-// We use a try-catch block for import.meta to handle environments where it might not be defined
-let env = {};
-try {
-  // eslint-disable-next-line no-undef
-  env = import.meta.env || {};
-} catch (e) {
-  console.warn("import.meta not available");
-}
 
-const firebaseConfig = {
-  apiKey: env.VITE_FIREBASE_API_KEY,
-  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: env.VITE_FIREBASE_APP_ID
+// Helper function to safely get environment variables in various build environments
+const getEnv = (key) => {
+  let value = '';
+  // 1. Try Vite / Modern (import.meta.env)
+  try {
+    // eslint-disable-next-line no-undef
+    if (import.meta && import.meta.env && import.meta.env[key]) {
+      value = import.meta.env[key];
+    }
+  } catch (e) { /* ignore */ }
+
+  // 2. Try Standard / Webpack (process.env) if not found
+  if (!value) {
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof process !== 'undefined' && process.env && process.env[key]) {
+        value = process.env[key];
+      }
+    } catch (e) { /* ignore */ }
+  }
+  return value;
 };
 
-// We wrap initialization in a check so the app doesn't crash if keys are missing (like in this preview)
+const firebaseConfig = {
+  apiKey: getEnv('VITE_FIREBASE_API_KEY'),
+  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN'),
+  projectId: getEnv('VITE_FIREBASE_PROJECT_ID'),
+  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET'),
+  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID'),
+  appId: getEnv('VITE_FIREBASE_APP_ID')
+};
+
+// Initialize Firebase only if keys are present to prevent crashes
 let app, auth, db, storage;
+// We check for apiKey to decide if we should initialize
 if (firebaseConfig.apiKey) {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-  storage = getStorage(app);
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+    storage = getStorage(app);
+  } catch (err) {
+    console.error("Firebase init failed:", err);
+  }
 } else {
-  console.warn("Firebase keys are missing. This is expected in the preview window if you are using Secrets.");
+  console.warn("Firebase keys are missing.");
 }
 
 // This stays hardcoded for your standalone app
@@ -471,11 +489,23 @@ export default function KitchenApp() {
           <div className="flex flex-col items-center justify-center h-screen bg-slate-50 p-6 text-center">
               <AlertTriangle className="text-orange-500 h-16 w-16 mb-4" />
               <h1 className="text-2xl font-bold mb-2">Setup Required</h1>
-              <p className="max-w-md text-slate-600">
+              <p className="max-w-md text-slate-600 mb-6">
                   The app is waiting for your Firebase keys. 
                   <br/>
                   If you are seeing this on <b>Vercel</b>, please go to Settings &rarr; Environment Variables and add your keys.
               </p>
+              
+              <div className="w-full max-w-sm bg-slate-100 p-4 rounded-lg text-left text-xs font-mono border border-slate-300">
+                <p className="font-bold border-b border-slate-300 pb-2 mb-2">Debug Info (Are keys found?)</p>
+                <div className="space-y-1">
+                  <p>API_KEY: {firebaseConfig.apiKey ? "✅ Yes" : "❌ No"}</p>
+                  <p>AUTH_DOMAIN: {firebaseConfig.authDomain ? "✅ Yes" : "❌ No"}</p>
+                  <p>PROJECT_ID: {firebaseConfig.projectId ? "✅ Yes" : "❌ No"}</p>
+                  <p>STORAGE: {firebaseConfig.storageBucket ? "✅ Yes" : "❌ No"}</p>
+                  <p>SENDER_ID: {firebaseConfig.messagingSenderId ? "✅ Yes" : "❌ No"}</p>
+                  <p>APP_ID: {firebaseConfig.appId ? "✅ Yes" : "❌ No"}</p>
+                </div>
+              </div>
           </div>
       );
   }
