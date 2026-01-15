@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 
 // --- FIREBASE SETUP ---
-// PASTE YOUR KEYS FROM FIREBASE CONSOLE HERE:
+// I have pre-filled your keys here based on your previous message
 const firebaseConfig = {
   apiKey: "AIzaSyAvO-hM3lnpoTUODUCvD2nzZUCzgeiNHCo",
   authDomain: "switch-recipes.firebaseapp.com",
@@ -364,7 +364,7 @@ export default function KitchenApp() {
       
       {/* HEADER */}
       <header className="bg-slate-900 text-white p-4 shadow-lg sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="w-full px-4 md:px-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <ChefHat className="h-8 w-8 text-orange-400" />
             <div>
@@ -419,7 +419,7 @@ export default function KitchenApp() {
       </header>
 
       {/* MAIN */}
-      <main className="max-w-6xl mx-auto p-4 md:p-6">
+      <main className="w-full p-4 md:p-6">
         
         {selectedRecipe ? (
           // === DETAIL VIEW ===
@@ -555,7 +555,7 @@ export default function KitchenApp() {
               </button>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {filteredRecipes.map(recipe => (
                 <button
                   key={recipe.id}
