@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getFirestore, 
@@ -12,7 +12,17 @@ import {
   updateDoc,
   setDoc
 } from 'firebase/firestore';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getStorage, 
+  ref, 
+  uploadBytes, 
+  getDownloadURL 
+} from 'firebase/storage';
 import { 
   Search, 
   Plus, 
@@ -26,16 +36,22 @@ import {
   X,
   Maximize2,
   Minimize2,
-  Tag
+  Tag,
+  Camera,
+  AlertTriangle,
+  Clock,
+  Scale,
+  Calendar
 } from 'lucide-react';
 
 // --- FIREBASE SETUP ---
-// I have pre-filled your keys here based on your previous message
 const firebaseConfig = {
   apiKey: "AIzaSyAvO-hM3lnpoTUODUCvD2nzZUCzgeiNHCo",
   authDomain: "switch-recipes.firebaseapp.com",
   projectId: "switch-recipes",
-  storageBucket: "switch-recipes.firebasestorage.app",
+  // ⚠️ REPLACE THIS WITH YOUR BUCKET NAME FROM FIREBASE CONSOLE (Storage -> Files)
+  // It usually looks like 'switch-recipes.appspot.com' or 'switch-recipes.firebasestorage.app'
+  storageBucket: "switch-recipes.firebasestorage.app", 
   messagingSenderId: "430127530890",
   appId: "1:430127530890:web:b3bc426df11b082ef47e73"
 };
@@ -43,6 +59,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const storage = getStorage(app);
 
 // This stays hardcoded for your standalone app
 const appId = 'switch-bbq-tablet';
@@ -74,7 +91,16 @@ const TRANSLATIONS = {
     englishContent: "English Content",
     spanishContent: "Spanish Content (Optional)",
     fillBoth: "Tip: Fill both tabs so the language toggle works for your staff!",
-    missingTrans: "No Spanish translation available."
+    missingTrans: "No Spanish translation available.",
+    allergens: "Allergens",
+    shelfLife: "Shelf Life",
+    yield: "Yield",
+    uploadPhoto: "Upload Photo",
+    photoUploading: "Uploading...",
+    madeToday: "Made Today?",
+    goodUntil: "Good Until:",
+    shelfLifePlaceholder: "e.g., 5 days, 1 week",
+    yieldPlaceholder: "e.g., 2 Gallons, 4 Pans"
   },
   es: {
     searchPlaceholder: "Buscar recetas...",
@@ -101,11 +127,28 @@ const TRANSLATIONS = {
     englishContent: "Contenido en Inglés",
     spanishContent: "Contenido en Español (Opcional)",
     fillBoth: "Consejo: ¡Llene ambas pestañas para que el cambio de idioma funcione!",
-    missingTrans: "Traducción no disponible."
+    missingTrans: "Traducción no disponible.",
+    allergens: "Alérgenos",
+    shelfLife: "Vida Útil",
+    yield: "Rendimiento",
+    uploadPhoto: "Subir Foto",
+    photoUploading: "Subiendo...",
+    madeToday: "¿Hecho Hoy?",
+    goodUntil: "Bueno Hasta:",
+    shelfLifePlaceholder: "ej., 5 días, 1 semana",
+    yieldPlaceholder: "ej., 2 Galones, 4 Bandejas"
   }
 };
 
 const DEFAULT_CATEGORIES = ["Sauce", "Meat", "Side", "Dessert", "Prep"];
+const ALLERGEN_LIST = [
+  { id: 'gluten', label: 'Gluten', icon: '🍞' },
+  { id: 'dairy', label: 'Dairy', icon: '🥛' },
+  { id: 'egg', label: 'Egg', icon: '🥚' },
+  { id: 'soy', label: 'Soy', icon: '🌱' },
+  { id: 'nuts', label: 'Nuts', icon: '🥜' },
+  { id: 'shellfish', label: 'Shellfish', icon: '🦐' },
+];
 
 export default function KitchenApp() {
   const [user, setUser] = useState(null);
@@ -128,16 +171,22 @@ export default function KitchenApp() {
   const [showTagModal, setShowTagModal] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState(null);
   
-  // Form State (Bilingual)
-  const [editTab, setEditTab] = useState('en'); // 'en' or 'es' tab in the modal
+  // Form State
+  const [editTab, setEditTab] = useState('en');
   const [formData, setFormData] = useState({
     title: '',
     category: '',
     ingredientsEn: '',
     instructionsEn: '',
     ingredientsEs: '',
-    instructionsEs: ''
+    instructionsEs: '',
+    yield: '',
+    shelfLife: '',
+    allergens: [],
+    imageUrl: ''
   });
+  const [imageFile, setImageFile] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
   const [newTagInput, setNewTagInput] = useState('');
 
   // Wake Lock & Full Screen
@@ -169,18 +218,14 @@ export default function KitchenApp() {
     const unsubRecipes = onSnapshot(qRecipes, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setRecipes(data);
-    }, (error) => {
-      console.error("Error fetching recipes:", error);
-    });
+    }, (error) => console.error("Error fetching recipes:", error));
 
-    // 2. Fetch Categories (Settings)
+    // 2. Fetch Categories
     const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'categories');
     const unsubCategories = onSnapshot(settingsRef, (docSnap) => {
       if (docSnap.exists()) {
         const list = docSnap.data().list;
-        if (list && Array.isArray(list)) {
-          setCategories(list);
-        }
+        if (list && Array.isArray(list)) setCategories(list);
       }
     });
 
@@ -201,7 +246,12 @@ export default function KitchenApp() {
       const lock = await navigator.wakeLock.request('screen');
       setWakeLock(lock);
       lock.addEventListener('release', () => setWakeLock(null));
-    } catch (err) { console.error(err); }
+    } catch (err) { 
+      if (err.name === 'NotAllowedError') {
+        console.warn('Wake Lock request disallowed by permissions policy.');
+        setWakeLockSupported(false);
+      }
+    }
   };
 
   const releaseWakeLock = async () => {
@@ -218,16 +268,12 @@ export default function KitchenApp() {
 
   const toggleFullScreen = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().then(() => {
-        setIsFullScreen(true);
-      }).catch(err => {
-        console.warn("Full screen error:", err);
-      });
+      document.documentElement.requestFullscreen().catch(err => console.warn(err));
+      setIsFullScreen(true);
     } else {
       if (document.exitFullscreen) {
-        document.exitFullscreen().then(() => {
-             setIsFullScreen(false);
-        });
+        document.exitFullscreen();
+        setIsFullScreen(false);
       }
     }
   };
@@ -245,23 +291,42 @@ export default function KitchenApp() {
     }
   };
 
+  const uploadImage = async (file) => {
+    if (!file) return null;
+    const storageRef = ref(storage, `artifacts/${appId}/images/${Date.now()}_${file.name}`);
+    await uploadBytes(storageRef, file);
+    return await getDownloadURL(storageRef);
+  };
+
   const handleSaveRecipe = async () => {
     if (!formData.title) return;
-
-    const collectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'recipes');
-    const dataToSave = {
-      title: formData.title,
-      category: formData.category || categories[0],
-      ingredientsEn: formData.ingredientsEn,
-      instructionsEn: formData.instructionsEn,
-      ingredientsEs: formData.ingredientsEs,
-      instructionsEs: formData.instructionsEs,
-      ingredients: formData.ingredientsEn, 
-      instructions: formData.instructionsEn,
-      updatedAt: new Date()
-    };
+    setIsUploading(true);
 
     try {
+      let finalImageUrl = formData.imageUrl;
+
+      // Upload new image if selected
+      if (imageFile) {
+        finalImageUrl = await uploadImage(imageFile);
+      }
+
+      const collectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'recipes');
+      const dataToSave = {
+        title: formData.title,
+        category: formData.category || categories[0],
+        ingredientsEn: formData.ingredientsEn,
+        instructionsEn: formData.instructionsEn,
+        ingredientsEs: formData.ingredientsEs,
+        instructionsEs: formData.instructionsEs,
+        ingredients: formData.ingredientsEn, // Legacy fallback
+        instructions: formData.instructionsEn, // Legacy fallback
+        yield: formData.yield || '',
+        shelfLife: formData.shelfLife || '',
+        allergens: formData.allergens || [],
+        imageUrl: finalImageUrl || '',
+        updatedAt: new Date()
+      };
+
       if (editingRecipe) {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'recipes', editingRecipe.id), dataToSave);
       } else {
@@ -270,7 +335,9 @@ export default function KitchenApp() {
       closeModal();
     } catch (e) {
       console.error("Error saving:", e);
-      alert("Error saving.");
+      alert("Error saving. Check console for details.");
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -281,38 +348,48 @@ export default function KitchenApp() {
     }
   };
 
-  // Tag Management
-  const handleAddTag = async () => {
-    if (!newTagInput.trim()) return;
-    const newCategories = [...categories, newTagInput.trim()];
-    await saveCategories(newCategories);
-    setNewTagInput('');
-  };
-
-  const handleDeleteTag = async (tagToDelete) => {
-    if (window.confirm(`Delete tag "${tagToDelete}"?`)) {
-      const newCategories = categories.filter(c => c !== tagToDelete);
-      await saveCategories(newCategories);
-    }
-  };
-
-  const saveCategories = async (newList) => {
-    const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'categories');
-    await setDoc(settingsRef, { list: newList });
+  // --- CALCULATORS ---
+  const calculateExpiryDate = (shelfLifeString) => {
+    if (!shelfLifeString) return null;
+    
+    // Try to find the first number in the string
+    const match = shelfLifeString.match(/(\d+)/);
+    if (!match) return null;
+    
+    const number = parseInt(match[0]);
+    const today = new Date();
+    
+    // Simple heuristic: check for "week", "month", otherwise assume days
+    const lower = shelfLifeString.toLowerCase();
+    let daysToAdd = number;
+    
+    if (lower.includes('week')) daysToAdd = number * 7;
+    else if (lower.includes('month')) daysToAdd = number * 30;
+    
+    const futureDate = new Date(today);
+    futureDate.setDate(today.getDate() + daysToAdd);
+    
+    return futureDate.toLocaleDateString(language === 'es' ? 'es-MX' : 'en-US', { 
+      weekday: 'short', month: 'short', day: 'numeric' 
+    });
   };
 
   // --- MODAL HANDLERS ---
-
   const openAddModal = () => {
     setEditingRecipe(null);
     setEditTab('en');
+    setImageFile(null);
     setFormData({
       title: '',
       category: categories[0] || 'Sauce',
       ingredientsEn: '',
       instructionsEn: '',
       ingredientsEs: '',
-      instructionsEs: ''
+      instructionsEs: '',
+      yield: '',
+      shelfLife: '',
+      allergens: [],
+      imageUrl: ''
     });
     setShowAddModal(true);
   };
@@ -320,13 +397,18 @@ export default function KitchenApp() {
   const openEditModal = (recipe) => {
     setEditingRecipe(recipe);
     setEditTab('en');
+    setImageFile(null);
     setFormData({ 
       title: recipe.title, 
       category: recipe.category, 
       ingredientsEn: recipe.ingredientsEn || recipe.ingredients || '', 
       instructionsEn: recipe.instructionsEn || recipe.instructions || '', 
       ingredientsEs: recipe.ingredientsEs || '', 
-      instructionsEs: recipe.instructionsEs || '' 
+      instructionsEs: recipe.instructionsEs || '',
+      yield: recipe.yield || '',
+      shelfLife: recipe.shelfLife || '',
+      allergens: recipe.allergens || [],
+      imageUrl: recipe.imageUrl || ''
     });
     setShowAddModal(true);
   };
@@ -334,10 +416,21 @@ export default function KitchenApp() {
   const closeModal = () => {
     setShowAddModal(false);
     setEditingRecipe(null);
+    setImageFile(null);
+  };
+
+  const toggleAllergen = (id) => {
+    setFormData(prev => {
+      const current = prev.allergens || [];
+      if (current.includes(id)) {
+        return { ...prev, allergens: current.filter(a => a !== id) };
+      } else {
+        return { ...prev, allergens: [...current, id] };
+      }
+    });
   };
 
   // --- RENDER HELPERS ---
-
   const filteredRecipes = recipes.filter(r => {
     const matchesSearch = r.title.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = selectedCategory === 'All' || r.category === selectedCategory;
@@ -349,18 +442,16 @@ export default function KitchenApp() {
       return {
         ing: recipe.ingredientsEs || recipe.ingredientsEn || recipe.ingredients || t.missingTrans,
         inst: recipe.instructionsEs || recipe.instructionsEn || recipe.instructions || t.missingTrans,
-        isFallback: !recipe.ingredientsEs
       };
     }
     return {
       ing: recipe.ingredientsEn || recipe.ingredients || "",
       inst: recipe.instructionsEn || recipe.instructions || "",
-      isFallback: false
     };
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-800 w-full">
       
       {/* HEADER */}
       <header className="bg-slate-900 text-white p-4 shadow-lg sticky top-0 z-10">
@@ -374,45 +465,21 @@ export default function KitchenApp() {
           </div>
           
           <div className="flex items-center gap-4">
-            <button 
-              onClick={toggleFullScreen}
-              className="p-2 bg-slate-800 rounded-full text-slate-300 hover:text-white hover:bg-slate-700 transition hidden md:block"
-              title="Toggle Full Screen"
-            >
+            <button onClick={toggleFullScreen} className="p-2 bg-slate-800 rounded-full text-slate-300 hover:text-white hidden md:block">
               {isFullScreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
             </button>
-
-            <button 
-              onClick={() => setLanguage(l => l === 'en' ? 'es' : 'en')}
-              className="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-full text-sm font-medium hover:bg-slate-700 transition border border-slate-700"
-            >
+            <button onClick={() => setLanguage(l => l === 'en' ? 'es' : 'en')} className="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-full text-sm font-medium border border-slate-700">
               <Languages size={16} className="text-orange-400" />
               {language === 'en' ? 'Español' : 'English'}
             </button>
-
             {isAdmin ? (
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => setShowTagModal(true)}
-                  className="bg-slate-800 p-2 rounded-full hover:bg-slate-700 text-slate-300"
-                  title="Manage Tags"
-                >
-                  <Tag size={16} />
-                </button>
-                <button 
-                  onClick={() => setIsAdmin(false)}
-                  className="flex items-center gap-2 bg-green-600 px-3 py-1.5 rounded-full text-sm font-bold shadow hover:bg-green-500"
-                >
-                  <Unlock size={16} />
-                </button>
-              </div>
+               <button onClick={() => setIsAdmin(false)} className="bg-green-600 px-3 py-1.5 rounded-full text-sm font-bold shadow hover:bg-green-500 flex items-center gap-2">
+                 <Unlock size={16} />
+               </button>
             ) : (
-              <button 
-                onClick={() => setShowPinModal(true)}
-                className="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-full text-sm font-medium hover:bg-slate-700 transition"
-              >
-                <Lock size={16} />
-              </button>
+               <button onClick={() => setShowPinModal(true)} className="bg-slate-800 px-3 py-1.5 rounded-full text-sm font-medium hover:bg-slate-700 transition flex items-center gap-2">
+                 <Lock size={16} />
+               </button>
             )}
           </div>
         </div>
@@ -425,12 +492,8 @@ export default function KitchenApp() {
           // === DETAIL VIEW ===
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-300 pb-20">
             <div className="flex items-center justify-between mb-6">
-              <button 
-                onClick={() => setSelectedRecipe(null)}
-                className="flex items-center gap-2 bg-white border border-slate-300 px-6 py-3 rounded-xl shadow-sm text-lg font-bold hover:bg-slate-100 active:scale-95 transition"
-              >
-                <ArrowLeft />
-                {t.back}
+              <button onClick={() => setSelectedRecipe(null)} className="flex items-center gap-2 bg-white border border-slate-300 px-6 py-3 rounded-xl shadow-sm text-lg font-bold hover:bg-slate-100 active:scale-95 transition">
+                <ArrowLeft /> {t.back}
               </button>
 
               <div className="flex items-center gap-2">
@@ -439,46 +502,68 @@ export default function KitchenApp() {
                     <Sun size={14} /> {t.screenLockActive}
                   </span>
                 ) : (
-                  <span className="flex items-center gap-2 text-slate-400 px-3 py-1 text-xs">
-                     {t.screenLockInactive}
-                  </span>
+                  <span className="flex items-center gap-2 text-slate-400 px-3 py-1 text-xs">{t.screenLockInactive}</span>
                 )}
-                
                 {isAdmin && (
                   <>
-                    <button 
-                      onClick={() => { setSelectedRecipe(null); openEditModal(selectedRecipe); }}
-                      className="bg-blue-100 text-blue-700 p-3 rounded-lg hover:bg-blue-200"
-                    >
-                      {t.editRecipe}
-                    </button>
-                    <button 
-                      onClick={() => handleDeleteRecipe(selectedRecipe.id)}
-                      className="bg-red-100 text-red-700 p-3 rounded-lg hover:bg-red-200"
-                    >
-                      <Trash2 size={20} />
-                    </button>
+                    <button onClick={() => { setSelectedRecipe(null); openEditModal(selectedRecipe); }} className="bg-blue-100 text-blue-700 p-3 rounded-lg hover:bg-blue-200">{t.editRecipe}</button>
+                    <button onClick={() => handleDeleteRecipe(selectedRecipe.id)} className="bg-red-100 text-red-700 p-3 rounded-lg hover:bg-red-200"><Trash2 size={20} /></button>
                   </>
                 )}
               </div>
             </div>
 
             <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
-              <div className="bg-orange-500 p-6 text-white relative overflow-hidden">
-                 <div className="relative z-10">
-                    <span className="inline-block bg-black/20 px-3 py-1 rounded-full text-sm font-bold mb-2">
-                      {selectedRecipe.category}
-                    </span>
-                    <h2 className="text-3xl md:text-5xl font-black uppercase tracking-tight">
-                      {selectedRecipe.title}
-                    </h2>
-                    {language === 'es' && !selectedRecipe.ingredientsEs && (
-                      <p className="mt-2 text-orange-100 text-sm italic opacity-80">
-                        * Mostrando versión en inglés (traducción no disponible)
-                      </p>
+              <div className="bg-orange-500 p-6 text-white relative">
+                 <div className="relative z-10 flex flex-col md:flex-row gap-6 items-start">
+                    {selectedRecipe.imageUrl && (
+                      <img src={selectedRecipe.imageUrl} alt={selectedRecipe.title} className="w-full md:w-48 h-48 object-cover rounded-xl shadow-lg border-4 border-white/30" />
                     )}
+                    <div className="flex-1">
+                      <span className="inline-block bg-black/20 px-3 py-1 rounded-full text-sm font-bold mb-2">
+                        {selectedRecipe.category}
+                      </span>
+                      <h2 className="text-3xl md:text-5xl font-black uppercase tracking-tight">
+                        {selectedRecipe.title}
+                      </h2>
+                      
+                      {/* Meta Info Bar */}
+                      <div className="flex flex-wrap gap-3 mt-4">
+                        {selectedRecipe.yield && (
+                          <div className="flex items-center gap-2 bg-white/20 px-3 py-1.5 rounded-lg backdrop-blur-sm">
+                            <Scale size={18} />
+                            <span className="font-bold text-sm">{t.yield}: {selectedRecipe.yield}</span>
+                          </div>
+                        )}
+                        {selectedRecipe.shelfLife && (
+                          <div className="flex items-center gap-2 bg-white/20 px-3 py-1.5 rounded-lg backdrop-blur-sm">
+                            <Clock size={18} />
+                            <div className="flex flex-col leading-none">
+                              <span className="font-bold text-sm">{t.shelfLife}: {selectedRecipe.shelfLife}</span>
+                              {calculateExpiryDate(selectedRecipe.shelfLife) && (
+                                <span className="text-[10px] opacity-90">{t.madeToday} → {t.goodUntil} {calculateExpiryDate(selectedRecipe.shelfLife)}</span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* Allergen Badges */}
+                      {selectedRecipe.allergens && selectedRecipe.allergens.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-4">
+                          {selectedRecipe.allergens.map(algId => {
+                             const alg = ALLERGEN_LIST.find(a => a.id === algId);
+                             if (!alg) return null;
+                             return (
+                               <span key={algId} className="flex items-center gap-1 bg-red-600 text-white px-2 py-1 rounded text-xs font-bold shadow-sm border border-red-400">
+                                 <AlertTriangle size={12} /> {alg.icon} {alg.label}
+                               </span>
+                             )
+                          })}
+                        </div>
+                      )}
+                    </div>
                  </div>
-                 <ChefHat className="absolute -right-6 -bottom-6 text-orange-600 w-48 h-48 opacity-20 rotate-12" />
               </div>
 
               <div className="grid md:grid-cols-12 gap-0">
@@ -506,6 +591,7 @@ export default function KitchenApp() {
         ) : (
           // === LIST VIEW ===
           <div className="space-y-6 pb-20">
+            {/* Search Bar ... */}
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-4">
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 h-6 w-6" />
@@ -522,23 +608,13 @@ export default function KitchenApp() {
                 <button
                   onClick={() => setSelectedCategory('All')}
                   className={`px-6 py-2 rounded-full font-bold whitespace-nowrap transition ${
-                    selectedCategory === 'All' 
-                    ? 'bg-slate-800 text-white' 
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    selectedCategory === 'All' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
                   {t.all}
                 </button>
                 {categories.map(cat => (
-                  <button
-                    key={cat}
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`px-6 py-2 rounded-full font-bold whitespace-nowrap transition ${
-                      selectedCategory === cat 
-                      ? 'bg-orange-500 text-white' 
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
+                  <button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-6 py-2 rounded-full font-bold whitespace-nowrap transition ${selectedCategory === cat ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
                     {cat}
                   </button>
                 ))}
@@ -546,12 +622,8 @@ export default function KitchenApp() {
             </div>
 
             {isAdmin && (
-              <button 
-                onClick={openAddModal}
-                className="w-full py-4 bg-green-600 hover:bg-green-700 text-white rounded-xl font-bold text-lg shadow-md flex items-center justify-center gap-2 transition"
-              >
-                <Plus size={24} />
-                {t.addRecipe}
+              <button onClick={openAddModal} className="w-full py-4 bg-green-600 hover:bg-green-700 text-white rounded-xl font-bold text-lg shadow-md flex items-center justify-center gap-2 transition">
+                <Plus size={24} /> {t.addRecipe}
               </button>
             )}
 
@@ -560,230 +632,160 @@ export default function KitchenApp() {
                 <button
                   key={recipe.id}
                   onClick={() => setSelectedRecipe(recipe)}
-                  className="group relative bg-white p-6 rounded-2xl shadow-sm border border-slate-200 hover:shadow-xl hover:border-orange-300 hover:-translate-y-1 transition duration-200 text-left flex flex-col h-48 justify-between"
+                  className="group relative bg-white p-6 rounded-2xl shadow-sm border border-slate-200 hover:shadow-xl hover:border-orange-300 hover:-translate-y-1 transition duration-200 text-left flex flex-col h-64 justify-between overflow-hidden"
                 >
-                  <div>
-                    <span className="text-xs font-bold text-orange-500 uppercase tracking-wider mb-2 block">
-                      {recipe.category}
-                    </span>
-                    <h3 className="text-2xl font-black text-slate-800 group-hover:text-orange-600 leading-tight">
-                      {recipe.title}
-                    </h3>
+                  <div className="flex items-start justify-between">
+                    <div>
+                        <span className="text-xs font-bold text-orange-500 uppercase tracking-wider mb-2 block">{recipe.category}</span>
+                        <h3 className="text-2xl font-black text-slate-800 group-hover:text-orange-600 leading-tight line-clamp-2">{recipe.title}</h3>
+                    </div>
+                    {recipe.imageUrl && <img src={recipe.imageUrl} alt="" className="w-16 h-16 rounded-lg object-cover ml-2 bg-slate-100" />}
                   </div>
-                  <div className="flex items-center justify-between mt-4">
-                     <div className="flex gap-2">
-                        {recipe.ingredientsEs && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">ES</span>}
-                        {recipe.ingredientsEn && <span className="text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-bold">EN</span>}
+                  
+                  <div className="mt-auto space-y-2">
+                     {/* Badge Row */}
+                     <div className="flex flex-wrap gap-1">
+                        {recipe.yield && <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold">{t.yield}: {recipe.yield}</span>}
+                        {recipe.allergens && recipe.allergens.length > 0 && (
+                          <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-bold flex items-center gap-1">
+                             <AlertTriangle size={10} /> {recipe.allergens.length}
+                          </span>
+                        )}
                      </div>
-                     <div className="h-8 w-8 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-orange-100 group-hover:text-orange-600 transition">
-                        <Maximize2 size={16} />
+
+                     <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                        <div className="flex gap-2">
+                            {recipe.ingredientsEs && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">ES</span>}
+                            {recipe.ingredientsEn && <span className="text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-bold">EN</span>}
+                        </div>
+                        <div className="h-8 w-8 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-orange-100 group-hover:text-orange-600 transition">
+                            <Maximize2 size={16} />
+                        </div>
                      </div>
                   </div>
                 </button>
               ))}
-              
-              {filteredRecipes.length === 0 && (
-                <div className="col-span-full text-center py-12 text-slate-400">
-                  <p className="text-xl">No recipes found.</p>
-                </div>
-              )}
             </div>
           </div>
         )}
       </main>
 
       {/* --- MODALS --- */}
-
-      {/* 1. PIN Modal */}
+      
+      {/* 1. PIN Modal (Same as before) */}
       {showPinModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm">
             <h2 className="text-2xl font-bold mb-4 text-center">{t.enterPin}</h2>
-            <input 
-              type="password" 
-              inputMode="numeric" 
-              pattern="[0-9]*"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              className="w-full text-center text-4xl tracking-widest p-4 border-2 border-slate-200 rounded-xl mb-6 focus:border-orange-500 focus:outline-none font-mono"
-              placeholder="••••"
-              autoFocus
-            />
+            <input type="password" inputMode="numeric" pattern="[0-9]*" value={pinInput} onChange={(e) => setPinInput(e.target.value)} className="w-full text-center text-4xl tracking-widest p-4 border-2 border-slate-200 rounded-xl mb-6 focus:border-orange-500 focus:outline-none font-mono" placeholder="••••" autoFocus />
             <div className="grid grid-cols-2 gap-4">
-              <button 
-                onClick={() => { setShowPinModal(false); setPinInput(''); }}
-                className="py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100"
-              >
-                {t.cancel}
-              </button>
-              <button 
-                onClick={handleAdminLogin}
-                className="py-3 rounded-xl font-bold bg-slate-900 text-white hover:bg-slate-800"
-              >
-                Unlock
-              </button>
+              <button onClick={() => { setShowPinModal(false); setPinInput(''); }} className="py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100">{t.cancel}</button>
+              <button onClick={handleAdminLogin} className="py-3 rounded-xl font-bold bg-slate-900 text-white hover:bg-slate-800">Unlock</button>
             </div>
             <p className="text-center text-xs text-slate-400 mt-6">Default PIN: 1234</p>
           </div>
         </div>
       )}
 
-      {/* 2. TAG MANAGER Modal */}
-      {showTagModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-bold">{t.manageTags}</h3>
-                <button onClick={() => setShowTagModal(false)}><X /></button>
-              </div>
-              
-              <div className="flex gap-2 mb-4">
-                <input 
-                  value={newTagInput}
-                  onChange={(e) => setNewTagInput(e.target.value)}
-                  className="flex-1 border p-2 rounded-lg"
-                  placeholder={t.addTag}
-                />
-                <button 
-                  onClick={handleAddTag}
-                  className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold"
-                >
-                  <Plus />
-                </button>
-              </div>
-
-              <div className="max-h-60 overflow-y-auto space-y-2">
-                {categories.map(cat => (
-                  <div key={cat} className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
-                    <span className="font-medium">{cat}</span>
-                    <button onClick={() => handleDeleteTag(cat)} className="text-red-400 hover:text-red-600">
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-           </div>
-        </div>
-      )}
-
-      {/* 3. ADD/EDIT RECIPE Modal */}
+      {/* 2. ADD/EDIT RECIPE Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
               <h2 className="text-2xl font-bold">{editingRecipe ? t.editRecipe : t.addRecipe}</h2>
-              <button onClick={closeModal} className="text-slate-400 hover:text-slate-600">
-                <X size={24} />
-              </button>
+              <button onClick={closeModal} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
             </div>
             
-            <div className="p-6 overflow-y-auto space-y-4">
+            <div className="p-6 overflow-y-auto space-y-6">
               
-              {/* Common Fields */}
+              {/* Image Upload Area */}
+              <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl p-6 text-center">
+                 {formData.imageUrl && !imageFile && (
+                   <div className="mb-4 relative inline-block">
+                     <img src={formData.imageUrl} alt="Preview" className="h-32 rounded-lg shadow-sm" />
+                     <button onClick={() => setFormData({...formData, imageUrl: ''})} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1"><X size={12}/></button>
+                   </div>
+                 )}
+                 <label className="cursor-pointer block">
+                    <div className="flex flex-col items-center gap-2 text-slate-500 hover:text-orange-500 transition">
+                       <Camera size={32} />
+                       <span className="font-bold text-sm">{imageFile ? imageFile.name : t.uploadPhoto}</span>
+                    </div>
+                    <input type="file" accept="image/*" className="hidden" onChange={(e) => setImageFile(e.target.files[0])} />
+                 </label>
+              </div>
+
+              {/* Title & Category */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2 md:col-span-1">
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.title}</label>
-                  <input 
-                    type="text" 
-                    value={formData.title}
-                    onChange={e => setFormData({...formData, title: e.target.value})}
-                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:outline-none font-bold text-lg"
-                  />
+                  <input type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 font-bold text-lg" />
                 </div>
                 <div className="col-span-2 md:col-span-1">
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.category}</label>
-                  <select 
-                    value={formData.category}
-                    onChange={e => setFormData({...formData, category: e.target.value})}
-                    className="w-full p-3 border border-slate-300 rounded-lg bg-white"
-                  >
-                    {categories.map(cat => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
+                  <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg bg-white">
+                    {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                   </select>
                 </div>
               </div>
 
-              {/* Language Tabs */}
-              <div className="bg-slate-100 p-1 rounded-xl flex gap-1 mt-4">
-                <button 
-                  onClick={() => setEditTab('en')}
-                  className={`flex-1 py-2 rounded-lg text-sm font-bold transition ${
-                    editTab === 'en' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:bg-slate-200'
-                  }`}
-                >
-                  🇺🇸 English Content
-                </button>
-                <button 
-                  onClick={() => setEditTab('es')}
-                  className={`flex-1 py-2 rounded-lg text-sm font-bold transition ${
-                    editTab === 'es' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:bg-slate-200'
-                  }`}
-                >
-                  🇲🇽 Spanish Content
-                </button>
+              {/* Yield & Shelf Life */}
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.yield}</label>
+                    <input type="text" placeholder={t.yieldPlaceholder} value={formData.yield} onChange={e => setFormData({...formData, yield: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
+                 </div>
+                 <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.shelfLife}</label>
+                    <input type="text" placeholder={t.shelfLifePlaceholder} value={formData.shelfLife} onChange={e => setFormData({...formData, shelfLife: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
+                 </div>
+              </div>
+
+              {/* Allergens */}
+              <div>
+                 <label className="block text-xs font-bold text-slate-500 uppercase mb-2">{t.allergens}</label>
+                 <div className="flex flex-wrap gap-2">
+                    {ALLERGEN_LIST.map(alg => (
+                       <button 
+                         key={alg.id}
+                         onClick={() => toggleAllergen(alg.id)}
+                         className={`px-3 py-2 rounded-lg border text-sm font-bold flex items-center gap-2 transition ${
+                           formData.allergens.includes(alg.id) 
+                           ? 'bg-red-50 border-red-500 text-red-600' 
+                           : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                         }`}
+                       >
+                         <span>{alg.icon}</span> {alg.label}
+                       </button>
+                    ))}
+                 </div>
+              </div>
+
+              {/* Languages (Ingredients/Instructions) */}
+              <div className="bg-slate-100 p-1 rounded-xl flex gap-1">
+                <button onClick={() => setEditTab('en')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition ${editTab === 'en' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:bg-slate-200'}`}>🇺🇸 English</button>
+                <button onClick={() => setEditTab('es')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition ${editTab === 'es' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:bg-slate-200'}`}>🇲🇽 Español</button>
               </div>
 
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                <p className="text-xs text-slate-400 mb-3 font-medium text-center">{t.fillBoth}</p>
                 {editTab === 'en' ? (
-                  <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-200">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.pasteIngredients} (EN)</label>
-                      <textarea 
-                        value={formData.ingredientsEn}
-                        onChange={e => setFormData({...formData, ingredientsEn: e.target.value})}
-                        className="w-full p-3 border border-slate-300 rounded-lg h-32 font-mono text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                        placeholder="Paste English ingredients..."
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.pasteInstructions} (EN)</label>
-                      <textarea 
-                        value={formData.instructionsEn}
-                        onChange={e => setFormData({...formData, instructionsEn: e.target.value})}
-                        className="w-full p-3 border border-slate-300 rounded-lg h-32 font-mono text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none"
-                        placeholder="Paste English instructions..."
-                      />
-                    </div>
+                  <div className="space-y-4">
+                    <textarea value={formData.ingredientsEn} onChange={e => setFormData({...formData, ingredientsEn: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg h-32 font-mono text-sm" placeholder="Paste English ingredients..." />
+                    <textarea value={formData.instructionsEn} onChange={e => setFormData({...formData, instructionsEn: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg h-32 font-mono text-sm" placeholder="Paste English instructions..." />
                   </div>
                 ) : (
-                  <div className="space-y-4 animate-in fade-in slide-in-from-left-4 duration-200">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.pasteIngredients} (ES)</label>
-                      <textarea 
-                        value={formData.ingredientsEs}
-                        onChange={e => setFormData({...formData, ingredientsEs: e.target.value})}
-                        className="w-full p-3 border border-blue-200 bg-blue-50/50 rounded-lg h-32 font-mono text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                        placeholder="Pegar ingredientes en Español..."
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.pasteInstructions} (ES)</label>
-                      <textarea 
-                        value={formData.instructionsEs}
-                        onChange={e => setFormData({...formData, instructionsEs: e.target.value})}
-                        className="w-full p-3 border border-blue-200 bg-blue-50/50 rounded-lg h-32 font-mono text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                        placeholder="Pegar instrucciones en Español..."
-                      />
-                    </div>
+                  <div className="space-y-4">
+                    <textarea value={formData.ingredientsEs} onChange={e => setFormData({...formData, ingredientsEs: e.target.value})} className="w-full p-3 border border-blue-200 bg-blue-50/50 rounded-lg h-32 font-mono text-sm" placeholder="Pegar ingredientes en Español..." />
+                    <textarea value={formData.instructionsEs} onChange={e => setFormData({...formData, instructionsEs: e.target.value})} className="w-full p-3 border border-blue-200 bg-blue-50/50 rounded-lg h-32 font-mono text-sm" placeholder="Pegar instrucciones en Español..." />
                   </div>
                 )}
               </div>
             </div>
 
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 rounded-b-2xl">
-              <button 
-                onClick={closeModal}
-                className="px-6 py-3 rounded-lg font-bold text-slate-600 hover:bg-white border border-transparent hover:border-slate-200 transition"
-              >
-                {t.cancel}
-              </button>
-              <button 
-                onClick={handleSaveRecipe}
-                className="px-6 py-3 rounded-lg font-bold bg-orange-500 text-white hover:bg-orange-600 shadow-md transition"
-              >
-                {t.save}
+              <button onClick={closeModal} className="px-6 py-3 rounded-lg font-bold text-slate-600 hover:bg-white border border-transparent hover:border-slate-200">{t.cancel}</button>
+              <button onClick={handleSaveRecipe} disabled={isUploading} className="px-6 py-3 rounded-lg font-bold bg-orange-500 text-white hover:bg-orange-600 shadow-md flex items-center gap-2">
+                {isUploading ? t.photoUploading : t.save}
               </button>
             </div>
           </div>
