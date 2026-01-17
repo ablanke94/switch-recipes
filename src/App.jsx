@@ -574,9 +574,18 @@ export default function KitchenApp() {
               {language === 'en' ? 'Español' : 'English'}
             </button>
             {isAdmin ? (
-               <button onClick={() => setIsAdmin(false)} className="bg-green-600 px-3 py-1.5 rounded-full text-sm font-bold shadow hover:bg-green-500 flex items-center gap-2">
-                 <Unlock size={16} />
-               </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => setShowTagModal(true)}
+                  className="bg-slate-800 p-2 rounded-full hover:bg-slate-700 text-slate-300 transition"
+                  title={t.manageTags}
+                >
+                  <Tag size={16} />
+                </button>
+                <button onClick={() => setIsAdmin(false)} className="bg-green-600 px-3 py-1.5 rounded-full text-sm font-bold shadow hover:bg-green-500 flex items-center gap-2">
+                  <Unlock size={16} />
+                </button>
+              </div>
             ) : (
                <button onClick={() => setShowPinModal(true)} className="bg-slate-800 px-3 py-1.5 rounded-full text-sm font-medium hover:bg-slate-700 transition flex items-center gap-2">
                  <Lock size={16} />
