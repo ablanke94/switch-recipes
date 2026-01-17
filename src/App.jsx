@@ -41,15 +41,15 @@ import {
   AlertTriangle,
   Clock,
   Scale,
-  Calendar
+  Calendar,
+  Check
 } from 'lucide-react';
 
 // --- FIREBASE SETUP ---
 
-// Helper function to safely get environment variables in various build environments
+// Helper function to safely get environment variables
 const getEnv = (key) => {
   let value = '';
-  // 1. Try Vite / Modern (import.meta.env)
   try {
     // eslint-disable-next-line no-undef
     if (import.meta && import.meta.env && import.meta.env[key]) {
@@ -57,7 +57,6 @@ const getEnv = (key) => {
     }
   } catch (e) { /* ignore */ }
 
-  // 2. Try Standard / Webpack (process.env) if not found
   if (!value) {
     try {
       // eslint-disable-next-line no-undef
@@ -78,9 +77,8 @@ const firebaseConfig = {
   appId: getEnv('VITE_FIREBASE_APP_ID')
 };
 
-// Initialize Firebase only if keys are present to prevent crashes
+// Initialize Firebase safely
 let app, auth, db, storage;
-// We check for apiKey to decide if we should initialize
 if (firebaseConfig.apiKey) {
   try {
     app = initializeApp(firebaseConfig);
@@ -94,7 +92,6 @@ if (firebaseConfig.apiKey) {
   console.warn("Firebase keys are missing.");
 }
 
-// This stays hardcoded for your standalone app
 const appId = 'switch-bbq-tablet';
 
 // --- TRANSLATIONS ---
@@ -111,7 +108,7 @@ const TRANSLATIONS = {
     editRecipe: "Edit Recipe",
     deleteRecipe: "Delete Recipe",
     title: "Recipe Title",
-    category: "Category",
+    category: "Tags / Categories",
     pasteIngredients: "Ingredients",
     pasteInstructions: "Instructions",
     save: "Save Recipe",
@@ -147,7 +144,7 @@ const TRANSLATIONS = {
     editRecipe: "Editar Receta",
     deleteRecipe: "Borrar Receta",
     title: "Título de la Receta",
-    category: "Categoría",
+    category: "Etiquetas / Categorías",
     pasteIngredients: "Ingredientes",
     pasteInstructions: "Instrucciones",
     save: "Guardar Receta",
@@ -173,7 +170,11 @@ const TRANSLATIONS = {
   }
 };
 
-const DEFAULT_CATEGORIES = ["Sauce", "Meat", "Side", "Dessert", "Prep"];
+// --- BULK ADD TAGS HERE ---
+// You can add more items to this list. 
+// If your database already has a list saved, the database version will take priority.
+const DEFAULT_CATEGORIES = ["Sauce", "Meat", "Side", "Dessert", "Prep", "Appetizer", "Special"];
+
 const ALLERGEN_LIST = [
   { id: 'gluten', label: 'Gluten', icon: '🍞' },
   { id: 'dairy', label: 'Dairy', icon: '🥛' },
@@ -208,7 +209,7 @@ export default function KitchenApp() {
   const [editTab, setEditTab] = useState('en');
   const [formData, setFormData] = useState({
     title: '',
-    category: '',
+    categories: [], // Changed from single category to array
     ingredientsEn: '',
     instructionsEn: '',
     ingredientsEs: '',
@@ -231,7 +232,7 @@ export default function KitchenApp() {
 
   // --- AUTH ---
   useEffect(() => {
-    if (!auth) return; // Guard for missing keys
+    if (!auth) return;
     const initAuth = async () => {
        await signInAnonymously(auth);
     };
@@ -242,15 +243,29 @@ export default function KitchenApp() {
 
   // --- DATA SYNC ---
   useEffect(() => {
-    if (!user || !db) return; // Guard for missing keys
+    if (!user || !db) return;
 
     // 1. Fetch Recipes
-    const qRecipes = query(
-      collection(db, 'artifacts', appId, 'public', 'data', 'recipes'),
-      orderBy('createdAt', 'desc')
-    );
+    // We fetch all and sort client-side to avoid complex Firestore indexing issues with multiple filters
+    const qRecipes = query(collection(db, 'artifacts', appId, 'public', 'data', 'recipes'));
+    
     const unsubRecipes = onSnapshot(qRecipes, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const data = snapshot.docs.map(doc => {
+        const d = doc.data();
+        // Normalize categories: Ensure it's always an array
+        let normCats = [];
+        if (Array.isArray(d.categories)) {
+          normCats = d.categories;
+        } else if (d.category) {
+          // Backward compatibility for old single-string category
+          normCats = [d.category];
+        }
+        return { id: doc.id, ...d, categories: normCats };
+      });
+
+      // Alphabetical Sort by Title
+      data.sort((a, b) => a.title.localeCompare(b.title));
+      
       setRecipes(data);
     }, (error) => console.error("Error fetching recipes:", error));
 
@@ -282,7 +297,6 @@ export default function KitchenApp() {
       lock.addEventListener('release', () => setWakeLock(null));
     } catch (err) { 
       if (err.name === 'NotAllowedError') {
-        console.warn('Wake Lock request disallowed by permissions policy.');
         setWakeLockSupported(false);
       }
     }
@@ -338,22 +352,25 @@ export default function KitchenApp() {
 
     try {
       let finalImageUrl = formData.imageUrl;
-
-      // Upload new image if selected
       if (imageFile) {
         finalImageUrl = await uploadImage(imageFile);
       }
 
       const collectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'recipes');
+      
+      // Ensure we have at least one category, or default to first available
+      const catsToSave = formData.categories.length > 0 ? formData.categories : [categories[0]];
+
       const dataToSave = {
         title: formData.title,
-        category: formData.category || categories[0],
+        categories: catsToSave,
+        category: catsToSave[0], // Legacy fallback for any old listeners
         ingredientsEn: formData.ingredientsEn,
         instructionsEn: formData.instructionsEn,
         ingredientsEs: formData.ingredientsEs,
         instructionsEs: formData.instructionsEs,
-        ingredients: formData.ingredientsEn, // Legacy fallback
-        instructions: formData.instructionsEn, // Legacy fallback
+        ingredients: formData.ingredientsEn, 
+        instructions: formData.instructionsEn, 
         yield: formData.yield || '',
         shelfLife: formData.shelfLife || '',
         allergens: formData.allergens || [],
@@ -369,7 +386,7 @@ export default function KitchenApp() {
       closeModal();
     } catch (e) {
       console.error("Error saving:", e);
-      alert("Error saving. Check console for details.");
+      alert("Error saving.");
     } finally {
       setIsUploading(false);
     }
@@ -382,30 +399,40 @@ export default function KitchenApp() {
     }
   };
 
+  // Tag Management
+  const handleAddTag = async () => {
+    if (!newTagInput.trim()) return;
+    const newCategories = [...categories, newTagInput.trim()];
+    await saveCategories(newCategories);
+    setNewTagInput('');
+  };
+
+  const handleDeleteTag = async (tagToDelete) => {
+    if (window.confirm(`Delete tag "${tagToDelete}"?`)) {
+      const newCategories = categories.filter(c => c !== tagToDelete);
+      await saveCategories(newCategories);
+    }
+  };
+
+  const saveCategories = async (newList) => {
+    const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'categories');
+    await setDoc(settingsRef, { list: newList });
+  };
+
   // --- CALCULATORS ---
   const calculateExpiryDate = (shelfLifeString) => {
     if (!shelfLifeString) return null;
-    
-    // Try to find the first number in the string
     const match = shelfLifeString.match(/(\d+)/);
     if (!match) return null;
-    
     const number = parseInt(match[0]);
     const today = new Date();
-    
-    // Simple heuristic: check for "week", "month", otherwise assume days
     const lower = shelfLifeString.toLowerCase();
     let daysToAdd = number;
-    
     if (lower.includes('week')) daysToAdd = number * 7;
     else if (lower.includes('month')) daysToAdd = number * 30;
-    
     const futureDate = new Date(today);
     futureDate.setDate(today.getDate() + daysToAdd);
-    
-    return futureDate.toLocaleDateString(language === 'es' ? 'es-MX' : 'en-US', { 
-      weekday: 'short', month: 'short', day: 'numeric' 
-    });
+    return futureDate.toLocaleDateString(language === 'es' ? 'es-MX' : 'en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   };
 
   // --- MODAL HANDLERS ---
@@ -415,7 +442,7 @@ export default function KitchenApp() {
     setImageFile(null);
     setFormData({
       title: '',
-      category: categories[0] || 'Sauce',
+      categories: [categories[0]], // Default to first category
       ingredientsEn: '',
       instructionsEn: '',
       ingredientsEs: '',
@@ -434,7 +461,7 @@ export default function KitchenApp() {
     setImageFile(null);
     setFormData({ 
       title: recipe.title, 
-      category: recipe.category, 
+      categories: recipe.categories || [recipe.category] || [],
       ingredientsEn: recipe.ingredientsEn || recipe.ingredients || '', 
       instructionsEn: recipe.instructionsEn || recipe.instructions || '', 
       ingredientsEs: recipe.ingredientsEs || '', 
@@ -456,10 +483,19 @@ export default function KitchenApp() {
   const toggleAllergen = (id) => {
     setFormData(prev => {
       const current = prev.allergens || [];
-      if (current.includes(id)) {
-        return { ...prev, allergens: current.filter(a => a !== id) };
+      return current.includes(id) ? { ...prev, allergens: current.filter(a => a !== id) } : { ...prev, allergens: [...current, id] };
+    });
+  };
+
+  const toggleCategory = (cat) => {
+    setFormData(prev => {
+      const current = prev.categories || [];
+      if (current.includes(cat)) {
+        // Prevent removing the last category (optional, but good for data integrity)
+        if (current.length === 1) return prev; 
+        return { ...prev, categories: current.filter(c => c !== cat) };
       } else {
-        return { ...prev, allergens: [...current, id] };
+        return { ...prev, categories: [...current, cat] };
       }
     });
   };
@@ -467,7 +503,12 @@ export default function KitchenApp() {
   // --- RENDER HELPERS ---
   const filteredRecipes = recipes.filter(r => {
     const matchesSearch = r.title.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = selectedCategory === 'All' || r.category === selectedCategory;
+    
+    // Multi-tag filtering logic:
+    // If "All", show everything.
+    // If a specific category is selected, show recipe if that category is in its list.
+    const matchesCategory = selectedCategory === 'All' || (r.categories && r.categories.includes(selectedCategory));
+    
     return matchesSearch && matchesCategory;
   });
 
@@ -580,9 +621,13 @@ export default function KitchenApp() {
                       <img src={selectedRecipe.imageUrl} alt={selectedRecipe.title} className="w-full md:w-48 h-48 object-cover rounded-xl shadow-lg border-4 border-white/30" />
                     )}
                     <div className="flex-1">
-                      <span className="inline-block bg-black/20 px-3 py-1 rounded-full text-sm font-bold mb-2">
-                        {selectedRecipe.category}
-                      </span>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {selectedRecipe.categories && selectedRecipe.categories.map(cat => (
+                          <span key={cat} className="bg-black/20 px-3 py-1 rounded-full text-sm font-bold">
+                            {cat}
+                          </span>
+                        ))}
+                      </div>
                       <h2 className="text-3xl md:text-5xl font-black uppercase tracking-tight">
                         {selectedRecipe.title}
                       </h2>
@@ -696,7 +741,17 @@ export default function KitchenApp() {
                 >
                   <div className="flex items-start justify-between">
                     <div>
-                        <span className="text-xs font-bold text-orange-500 uppercase tracking-wider mb-2 block">{recipe.category}</span>
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {/* Show up to 2 categories on the card to save space */}
+                          {recipe.categories && recipe.categories.slice(0, 2).map(cat => (
+                            <span key={cat} className="text-xs font-bold text-orange-500 uppercase tracking-wider">
+                              {cat}
+                            </span>
+                          ))}
+                          {recipe.categories && recipe.categories.length > 2 && (
+                            <span className="text-xs font-bold text-orange-300">+</span>
+                          )}
+                        </div>
                         <h3 className="text-2xl font-black text-slate-800 group-hover:text-orange-600 leading-tight line-clamp-2">{recipe.title}</h3>
                     </div>
                     {recipe.imageUrl && <img src={recipe.imageUrl} alt="" className="w-16 h-16 rounded-lg object-cover ml-2 bg-slate-100" />}
@@ -734,7 +789,7 @@ export default function KitchenApp() {
       
       {/* 1. PIN Modal (Same as before) */}
       {showPinModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm">
             <h2 className="text-2xl font-bold mb-4 text-center">{t.enterPin}</h2>
             <input type="password" inputMode="numeric" pattern="[0-9]*" value={pinInput} onChange={(e) => setPinInput(e.target.value)} className="w-full text-center text-4xl tracking-widest p-4 border-2 border-slate-200 rounded-xl mb-6 focus:border-orange-500 focus:outline-none font-mono" placeholder="••••" autoFocus />
@@ -747,9 +802,47 @@ export default function KitchenApp() {
         </div>
       )}
 
-      {/* 2. ADD/EDIT RECIPE Modal */}
+      {/* 2. TAG MANAGER Modal */}
+      {showTagModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 z-50">
+           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-bold">{t.manageTags}</h3>
+                <button onClick={() => setShowTagModal(false)}><X /></button>
+              </div>
+              
+              <div className="flex gap-2 mb-4">
+                <input 
+                  value={newTagInput}
+                  onChange={(e) => setNewTagInput(e.target.value)}
+                  className="flex-1 border p-2 rounded-lg"
+                  placeholder={t.addTag}
+                />
+                <button 
+                  onClick={handleAddTag}
+                  className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold"
+                >
+                  <Plus />
+                </button>
+              </div>
+
+              <div className="max-h-60 overflow-y-auto space-y-2">
+                {categories.map(cat => (
+                  <div key={cat} className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
+                    <span className="font-medium">{cat}</span>
+                    <button onClick={() => handleDeleteTag(cat)} className="text-red-400 hover:text-red-600">
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+           </div>
+        </div>
+      )}
+
+      {/* 3. ADD/EDIT RECIPE Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
               <h2 className="text-2xl font-bold">{editingRecipe ? t.editRecipe : t.addRecipe}</h2>
@@ -775,17 +868,30 @@ export default function KitchenApp() {
                  </label>
               </div>
 
-              {/* Title & Category */}
+              {/* Title & Category (Multi-select) */}
               <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2 md:col-span-1">
+                <div className="col-span-2">
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.title}</label>
                   <input type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 font-bold text-lg" />
                 </div>
-                <div className="col-span-2 md:col-span-1">
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.category}</label>
-                  <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg bg-white">
-                    {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                  </select>
+                
+                <div className="col-span-2">
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">{t.category}</label>
+                  <div className="flex flex-wrap gap-2">
+                    {categories.map(cat => (
+                       <button 
+                         key={cat}
+                         onClick={() => toggleCategory(cat)}
+                         className={`px-3 py-2 rounded-lg border text-sm font-bold flex items-center gap-2 transition ${
+                           formData.categories.includes(cat) 
+                           ? 'bg-orange-500 border-orange-600 text-white shadow-md' 
+                           : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                         }`}
+                       >
+                         {formData.categories.includes(cat) && <Check size={14} />} {cat}
+                       </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
