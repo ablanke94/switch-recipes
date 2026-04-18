@@ -100,9 +100,10 @@ const TRANSLATIONS = {
     back: "Back",
     adminMode: "Admin Mode",
     enterPin: "Enter Manager PIN",
-    addRecipe: "Add Recipe",
+    addPrepRecipe: "Add Prep Recipe",
+    addLineBuild: "Add Line Build",
     editRecipe: "Edit Recipe",
-    deleteRecipe: "Delete Recipe",
+    deleteRecipe: "Delete",
     title: "Recipe Title",
     category: "Tags / Categories",
     pasteIngredients: "Ingredients",
@@ -127,7 +128,9 @@ const TRANSLATIONS = {
     goodUntil: "Good Until:",
     shelfLifePlaceholder: "e.g., 5 days, 1 week",
     yieldPlaceholder: "e.g., 2 Gallons, 4 Pans",
-    signOut: "Sign Out App"
+    signOut: "Sign Out App",
+    prepRecipes: "Prep Recipes",
+    lineBuilds: "Line Builds"
   },
   es: {
     searchPlaceholder: "Buscar recetas...",
@@ -137,9 +140,10 @@ const TRANSLATIONS = {
     back: "Atrás",
     adminMode: "Modo Admin",
     enterPin: "Ingresar PIN de Gerente",
-    addRecipe: "Agregar Receta",
+    addPrepRecipe: "Agregar Receta",
+    addLineBuild: "Agregar Montaje",
     editRecipe: "Editar Receta",
-    deleteRecipe: "Borrar Receta",
+    deleteRecipe: "Borrar",
     title: "Título de la Receta",
     category: "Etiquetas / Categorías",
     pasteIngredients: "Ingredientes",
@@ -153,7 +157,7 @@ const TRANSLATIONS = {
     addTag: "Agregar Etiqueta",
     englishContent: "Contenido en Inglés",
     spanishContent: "Contenido en Español (Opcional)",
-    fillBoth: "Consejo: ¡Llene ambas pestañas para que el cambio de idioma funcione!",
+    fillBoth: "Consejo: ¡Llene ambas pestañas para el cambio de idioma!",
     missingTrans: "Traducción no disponible.",
     allergens: "Alérgenos",
     shelfLife: "Vida Útil",
@@ -164,7 +168,9 @@ const TRANSLATIONS = {
     goodUntil: "Bueno Hasta:",
     shelfLifePlaceholder: "ej., 5 días, 1 semana",
     yieldPlaceholder: "ej., 2 Galones, 4 Bandejas",
-    signOut: "Cerrar Sesión"
+    signOut: "Cerrar Sesión",
+    prepRecipes: "Recetas de Prep",
+    lineBuilds: "Montaje de Línea"
   }
 };
 
@@ -189,6 +195,7 @@ export default function KitchenApp() {
   const [language, setLanguage] = useState('en'); 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [viewType, setViewType] = useState('prep'); // 'prep' or 'build'
   
   // Login State
   const [loginEmail, setLoginEmail] = useState('');
@@ -210,6 +217,7 @@ export default function KitchenApp() {
   const [editTab, setEditTab] = useState('en');
   const [formData, setFormData] = useState({
     title: '',
+    type: 'prep',
     categories: [], 
     ingredientsEn: '',
     instructionsEn: '',
@@ -240,7 +248,6 @@ export default function KitchenApp() {
 
     const initAuth = async () => {
       try {
-        // This is a safety fallback for specific preview environments
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
         }
@@ -252,7 +259,7 @@ export default function KitchenApp() {
 
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      setIsAuthReady(true); // Don't show login screen until we verify if they are already logged in
+      setIsAuthReady(true); 
     });
     return () => unsubscribe();
   }, []);
@@ -263,7 +270,6 @@ export default function KitchenApp() {
     setIsLoggingIn(true);
     try {
       await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
-      // Success! The onAuthStateChanged listener will auto-update the user state
     } catch (err) {
       console.error(err);
       setLoginError('Invalid email or password.');
@@ -292,7 +298,7 @@ export default function KitchenApp() {
         let normCats = [];
         if (Array.isArray(d.categories)) normCats = d.categories;
         else if (d.category) normCats = [d.category];
-        return { id: doc.id, ...d, categories: normCats };
+        return { id: doc.id, ...d, categories: normCats, type: d.type || 'prep' };
       });
       data.sort((a, b) => a.title.localeCompare(b.title));
       setRecipes(data);
@@ -355,7 +361,7 @@ export default function KitchenApp() {
 
   // --- ACTIONS ---
   const handleAdminLogin = () => {
-    if (pinInput === '1234') { 
+    if (pinInput === '6610') { 
       setIsAdmin(true);
       setShowPinModal(false);
       setPinInput('');
@@ -385,6 +391,7 @@ export default function KitchenApp() {
 
       const dataToSave = {
         title: formData.title,
+        type: formData.type || 'prep',
         categories: catsToSave,
         category: catsToSave[0], 
         ingredientsEn: formData.ingredientsEn,
@@ -463,7 +470,7 @@ export default function KitchenApp() {
     setEditTab('en');
     setImageFile(null);
     setFormData({
-      title: '', categories: [categories[0]], ingredientsEn: '', instructionsEn: '',
+      title: '', type: viewType, categories: [categories[0]], ingredientsEn: '', instructionsEn: '',
       ingredientsEs: '', instructionsEs: '', yield: '', shelfLife: '', allergens: [], imageUrl: ''
     });
     setShowAddModal(true);
@@ -474,7 +481,7 @@ export default function KitchenApp() {
     setEditTab('en');
     setImageFile(null);
     setFormData({ 
-      title: recipe.title, categories: recipe.categories || [recipe.category] || [],
+      title: recipe.title, type: recipe.type || 'prep', categories: recipe.categories || [recipe.category] || [],
       ingredientsEn: recipe.ingredientsEn || recipe.ingredients || '', instructionsEn: recipe.instructionsEn || recipe.instructions || '', 
       ingredientsEs: recipe.ingredientsEs || '', instructionsEs: recipe.instructionsEs || '',
       yield: recipe.yield || '', shelfLife: recipe.shelfLife || '', allergens: recipe.allergens || [], imageUrl: recipe.imageUrl || ''
@@ -511,7 +518,8 @@ export default function KitchenApp() {
   const filteredRecipes = recipes.filter(r => {
     const matchesSearch = r.title.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = selectedCategory === 'All' || (r.categories && r.categories.includes(selectedCategory));
-    return matchesSearch && matchesCategory;
+    const matchesType = (r.type || 'prep') === viewType;
+    return matchesSearch && matchesCategory && matchesType;
   });
 
   const getDisplayContent = (recipe) => {
@@ -760,6 +768,31 @@ export default function KitchenApp() {
         ) : (
           // === LIST VIEW ===
           <div className="space-y-6 pb-20">
+            
+            {/* RECIPE TYPE TABS */}
+            <div className="flex bg-slate-200/70 p-1.5 rounded-2xl mb-2">
+              <button 
+                onClick={() => setViewType('prep')}
+                className={`flex-1 py-3 rounded-xl font-black text-sm md:text-base transition-all duration-200 ${
+                  viewType === 'prep' 
+                  ? 'bg-white shadow-md text-orange-600 scale-[1.02]' 
+                  : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {t.prepRecipes}
+              </button>
+              <button 
+                onClick={() => setViewType('build')}
+                className={`flex-1 py-3 rounded-xl font-black text-sm md:text-base transition-all duration-200 ${
+                  viewType === 'build' 
+                  ? 'bg-white shadow-md text-orange-600 scale-[1.02]' 
+                  : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {t.lineBuilds}
+              </button>
+            </div>
+
             {/* Search Bar ... */}
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-4">
               <div className="relative">
@@ -769,8 +802,16 @@ export default function KitchenApp() {
                   placeholder={t.searchPlaceholder}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-14 pr-4 py-4 text-xl rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-orange-500 focus:outline-none transition"
+                  className="w-full pl-14 pr-12 py-4 text-xl rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-orange-500 focus:outline-none transition"
                 />
+                {searchQuery.length > 0 && (
+                  <button 
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 bg-slate-200 hover:bg-slate-300 rounded-full transition"
+                  >
+                    <X size={18} />
+                  </button>
+                )}
               </div>
 
               <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
@@ -792,7 +833,7 @@ export default function KitchenApp() {
 
             {isAdmin && (
               <button onClick={openAddModal} className="w-full py-4 bg-green-600 hover:bg-green-700 text-white rounded-xl font-bold text-lg shadow-md flex items-center justify-center gap-2 transition">
-                <Plus size={24} /> {t.addRecipe}
+                <Plus size={24} /> {viewType === 'prep' ? t.addPrepRecipe : t.addLineBuild}
               </button>
             )}
 
@@ -844,6 +885,12 @@ export default function KitchenApp() {
                   </div>
                 </button>
               ))}
+              
+              {filteredRecipes.length === 0 && (
+                <div className="col-span-full text-center py-12 text-slate-400">
+                  <p className="text-xl">No {viewType === 'prep' ? 'prep recipes' : 'line builds'} found.</p>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -851,17 +898,29 @@ export default function KitchenApp() {
 
       {/* --- MODALS --- */}
       
-      {/* 1. PIN Modal (Same as before) */}
+      {/* 1. PIN Modal */}
       {showPinModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm">
             <h2 className="text-2xl font-bold mb-4 text-center">{t.enterPin}</h2>
-            <input type="password" inputMode="numeric" pattern="[0-9]*" value={pinInput} onChange={(e) => setPinInput(e.target.value)} className="w-full text-center text-4xl tracking-widest p-4 border-2 border-slate-200 rounded-xl mb-6 focus:border-orange-500 focus:outline-none font-mono" placeholder="••••" autoFocus />
-            <div className="grid grid-cols-2 gap-4">
-              <button onClick={() => { setShowPinModal(false); setPinInput(''); }} className="py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100">{t.cancel}</button>
-              <button onClick={handleAdminLogin} className="py-3 rounded-xl font-bold bg-slate-900 text-white hover:bg-slate-800">Unlock</button>
-            </div>
-            <p className="text-center text-xs text-slate-400 mt-6">Default PIN: 1234</p>
+            <form onSubmit={(e) => { e.preventDefault(); handleAdminLogin(); }}>
+              <input 
+                type="password" 
+                inputMode="numeric" 
+                pattern="[0-9]*" 
+                autoComplete="new-password" 
+                name="admin_pin_code"
+                value={pinInput} 
+                onChange={(e) => setPinInput(e.target.value)} 
+                className="w-full text-center text-4xl tracking-widest p-4 border-2 border-slate-200 rounded-xl mb-6 focus:border-orange-500 focus:outline-none font-mono" 
+                placeholder="••••" 
+                autoFocus 
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <button type="button" onClick={() => { setShowPinModal(false); setPinInput(''); }} className="py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100">{t.cancel}</button>
+                <button type="submit" className="py-3 rounded-xl font-bold bg-slate-900 text-white hover:bg-slate-800">Unlock</button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -909,7 +968,7 @@ export default function KitchenApp() {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-              <h2 className="text-2xl font-bold">{editingRecipe ? t.editRecipe : t.addRecipe}</h2>
+              <h2 className="text-2xl font-bold">{editingRecipe ? t.editRecipe : (viewType === 'prep' ? t.addPrepRecipe : t.addLineBuild)}</h2>
               <button onClick={closeModal} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
             </div>
             
