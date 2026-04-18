@@ -183,7 +183,9 @@ const TRANSLATIONS = {
   }
 };
 
-const DEFAULT_CATEGORIES = ["Sauce", "Meat", "Side", "Dessert", "Prep", "Appetizer", "Special"];
+const DEFAULT_PREP_CATEGORIES = ["Sauce", "Meat", "Side", "Dessert", "Prep", "Appetizer", "Special"];
+const DEFAULT_BUILD_CATEGORIES = ["Appetizer", "Sandwich", "House Favorite", "Salad", "Fryer", "Oven"];
+
 const ALLERGEN_LIST = [
   { id: 'gluten', label: 'Gluten', icon: '🍞' },
   { id: 'dairy', label: 'Dairy', icon: '🥛' },
@@ -197,7 +199,12 @@ export default function KitchenApp() {
   const [user, setUser] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [recipes, setRecipes] = useState([]);
-  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  
+  // Tag categories split by type
+  const [categories, setCategories] = useState({
+    prep: DEFAULT_PREP_CATEGORIES,
+    build: DEFAULT_BUILD_CATEGORIES
+  });
   
   // UI State
   const [selectedRecipe, setSelectedRecipe] = useState(null);
@@ -250,6 +257,10 @@ export default function KitchenApp() {
   const [isFullScreen, setIsFullScreen] = useState(false);
 
   const t = TRANSLATIONS[language];
+
+  // Helper for current active categories based on view or form type
+  const currentViewCategories = viewType === 'prep' ? categories.prep : categories.build;
+  const currentFormCategories = formData.type === 'prep' ? categories.prep : categories.build;
 
   // --- AUTH SETUP ---
   useEffect(() => {
@@ -320,8 +331,19 @@ export default function KitchenApp() {
     const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'categories');
     const unsubCategories = onSnapshot(settingsRef, (docSnap) => {
       if (docSnap.exists()) {
-        const list = docSnap.data().list;
-        if (list && Array.isArray(list)) setCategories(list);
+        const data = docSnap.data();
+        if (data.prep || data.build) {
+          setCategories({
+            prep: data.prep || DEFAULT_PREP_CATEGORIES,
+            build: data.build || DEFAULT_BUILD_CATEGORIES
+          });
+        } else if (data.list) {
+          // Fallback for legacy categories format
+          setCategories({
+            prep: data.list,
+            build: DEFAULT_BUILD_CATEGORIES
+          });
+        }
       }
     });
 
@@ -399,19 +421,19 @@ export default function KitchenApp() {
       if (imageFile) finalImageUrl = await uploadImage(imageFile);
 
       const collectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'recipes');
-      const catsToSave = formData.categories.length > 0 ? formData.categories : [categories[0]];
+      const catsToSave = formData.categories.length > 0 ? formData.categories : [currentFormCategories[0]];
 
       const dataToSave = {
         title: formData.title,
         type: formData.type || 'prep',
         categories: catsToSave,
-        category: catsToSave[0], 
+        category: catsToSave[0], // Legacy field
         ingredientsEn: formData.ingredientsEn,
         instructionsEn: formData.instructionsEn,
         ingredientsEs: formData.ingredientsEs,
         instructionsEs: formData.instructionsEs,
-        ingredients: formData.ingredientsEn, 
-        instructions: formData.instructionsEn, 
+        ingredients: formData.ingredientsEn, // Legacy field
+        instructions: formData.instructionsEn, // Legacy field
         yield: formData.yield || '',
         shelfLife: formData.shelfLife || '',
         prepTime: formData.prepTime || '',
@@ -421,6 +443,12 @@ export default function KitchenApp() {
         imageUrl: finalImageUrl || '',
         updatedAt: new Date()
       };
+
+      // Clean up fields for line builds so we don't save empty data for things they don't use
+      if (dataToSave.type === 'build') {
+        dataToSave.yield = '';
+        dataToSave.shelfLife = '';
+      }
 
       if (editingRecipe) {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'recipes', editingRecipe.id), dataToSave);
@@ -446,21 +474,31 @@ export default function KitchenApp() {
   // Tag Management
   const handleAddTag = async () => {
     if (!newTagInput.trim()) return;
-    const newCategories = [...categories, newTagInput.trim()];
-    await saveCategories(newCategories);
+    const targetList = viewType === 'prep' ? categories.prep : categories.build;
+    const newList = [...targetList, newTagInput.trim()];
+    
+    await saveCategories(
+      viewType === 'prep' ? newList : categories.prep,
+      viewType === 'build' ? newList : categories.build
+    );
     setNewTagInput('');
   };
 
   const handleDeleteTag = async (tagToDelete) => {
     if (window.confirm(`Delete tag "${tagToDelete}"?`)) {
-      const newCategories = categories.filter(c => c !== tagToDelete);
-      await saveCategories(newCategories);
+      const targetList = viewType === 'prep' ? categories.prep : categories.build;
+      const newList = targetList.filter(c => c !== tagToDelete);
+      
+      await saveCategories(
+        viewType === 'prep' ? newList : categories.prep,
+        viewType === 'build' ? newList : categories.build
+      );
     }
   };
 
-  const saveCategories = async (newList) => {
+  const saveCategories = async (newPrep, newBuild) => {
     const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'categories');
-    await setDoc(settingsRef, { list: newList });
+    await setDoc(settingsRef, { prep: newPrep, build: newBuild, list: newPrep });
   };
 
   // --- CALCULATORS ---
@@ -485,7 +523,7 @@ export default function KitchenApp() {
     setEditTab('en');
     setImageFile(null);
     setFormData({
-      title: '', type: viewType, categories: [categories[0]], ingredientsEn: '', instructionsEn: '',
+      title: '', type: viewType, categories: [currentViewCategories[0]], ingredientsEn: '', instructionsEn: '',
       ingredientsEs: '', instructionsEs: '', yield: '', shelfLife: '', prepTime: '', cqpEn: '', cqpEs: '', allergens: [], imageUrl: ''
     });
     setShowAddModal(true);
@@ -729,13 +767,13 @@ export default function KitchenApp() {
                             <span className="font-bold text-sm">{t.prepTime}: {selectedRecipe.prepTime}</span>
                           </div>
                         )}
-                        {selectedRecipe.yield && (
+                        {selectedRecipe.type === 'prep' && selectedRecipe.yield && (
                           <div className="flex items-center gap-2 bg-white/20 px-3 py-1.5 rounded-lg backdrop-blur-sm">
                             <Scale size={18} />
                             <span className="font-bold text-sm">{t.yield}: {selectedRecipe.yield}</span>
                           </div>
                         )}
-                        {selectedRecipe.shelfLife && (
+                        {selectedRecipe.type === 'prep' && selectedRecipe.shelfLife && (
                           <div className="flex items-center gap-2 bg-white/20 px-3 py-1.5 rounded-lg backdrop-blur-sm">
                             <Clock size={18} />
                             <div className="flex flex-col leading-none">
@@ -805,7 +843,7 @@ export default function KitchenApp() {
             {/* RECIPE TYPE TABS */}
             <div className="flex bg-slate-200/70 p-1.5 rounded-2xl mb-2">
               <button 
-                onClick={() => setViewType('prep')}
+                onClick={() => { setViewType('prep'); setSelectedCategory('All'); }}
                 className={`flex-1 py-3 rounded-xl font-black text-sm md:text-base transition-all duration-200 ${
                   viewType === 'prep' 
                   ? 'bg-white shadow-md text-orange-600 scale-[1.02]' 
@@ -815,7 +853,7 @@ export default function KitchenApp() {
                 {t.prepRecipes}
               </button>
               <button 
-                onClick={() => setViewType('build')}
+                onClick={() => { setViewType('build'); setSelectedCategory('All'); }}
                 className={`flex-1 py-3 rounded-xl font-black text-sm md:text-base transition-all duration-200 ${
                   viewType === 'build' 
                   ? 'bg-white shadow-md text-orange-600 scale-[1.02]' 
@@ -856,7 +894,7 @@ export default function KitchenApp() {
                 >
                   {t.all}
                 </button>
-                {categories.map(cat => (
+                {currentViewCategories.map(cat => (
                   <button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-6 py-2 rounded-full font-bold whitespace-nowrap transition ${selectedCategory === cat ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
                     {cat}
                   </button>
@@ -898,7 +936,7 @@ export default function KitchenApp() {
                   <div className="mt-auto space-y-2">
                      {/* Badge Row */}
                      <div className="flex flex-wrap gap-1">
-                        {recipe.yield && <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold">{t.yield}: {recipe.yield}</span>}
+                        {recipe.type === 'prep' && recipe.yield && <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold">{t.yield}: {recipe.yield}</span>}
                         {recipe.allergens && recipe.allergens.length > 0 && (
                           <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-bold flex items-center gap-1">
                              <AlertTriangle size={10} /> {recipe.allergens.length}
@@ -963,7 +1001,7 @@ export default function KitchenApp() {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 z-50">
            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-bold">{t.manageTags}</h3>
+                <h3 className="text-xl font-bold">{t.manageTags} ({viewType === 'prep' ? 'Prep' : 'Build'})</h3>
                 <button onClick={() => setShowTagModal(false)}><X /></button>
               </div>
               
@@ -983,7 +1021,7 @@ export default function KitchenApp() {
               </div>
 
               <div className="max-h-60 overflow-y-auto space-y-2">
-                {categories.map(cat => (
+                {currentViewCategories.map(cat => (
                   <div key={cat} className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
                     <span className="font-medium">{cat}</span>
                     <button onClick={() => handleDeleteTag(cat)} className="text-red-400 hover:text-red-600">
@@ -1034,7 +1072,7 @@ export default function KitchenApp() {
                 <div className="col-span-2">
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-2">{t.category}</label>
                   <div className="flex flex-wrap gap-2">
-                    {categories.map(cat => (
+                    {currentFormCategories.map(cat => (
                        <button 
                          key={cat}
                          onClick={() => toggleCategory(cat)}
@@ -1052,15 +1090,19 @@ export default function KitchenApp() {
               </div>
 
               {/* Yield & Shelf Life & Prep Time */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                 <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.yield}</label>
-                    <input type="text" placeholder={t.yieldPlaceholder} value={formData.yield} onChange={e => setFormData({...formData, yield: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
-                 </div>
-                 <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.shelfLife}</label>
-                    <input type="text" placeholder={t.shelfLifePlaceholder} value={formData.shelfLife} onChange={e => setFormData({...formData, shelfLife: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
-                 </div>
+              <div className={`grid grid-cols-1 gap-4 ${formData.type === 'prep' ? 'md:grid-cols-3' : 'md:grid-cols-1'}`}>
+                 {formData.type === 'prep' && (
+                   <>
+                     <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.yield}</label>
+                        <input type="text" placeholder={t.yieldPlaceholder} value={formData.yield} onChange={e => setFormData({...formData, yield: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
+                     </div>
+                     <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.shelfLife}</label>
+                        <input type="text" placeholder={t.shelfLifePlaceholder} value={formData.shelfLife} onChange={e => setFormData({...formData, shelfLife: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
+                     </div>
+                   </>
+                 )}
                  <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.prepTime}</label>
                     <input type="text" placeholder={t.prepTimePlaceholder} value={formData.prepTime} onChange={e => setFormData({...formData, prepTime: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
