@@ -44,7 +44,8 @@ import {
   Clock,
   Scale,
   LogOut,
-  Check
+  Check,
+  Timer
 } from 'lucide-react';
 
 // --- FIREBASE SETUP ---
@@ -130,7 +131,11 @@ const TRANSLATIONS = {
     yieldPlaceholder: "e.g., 2 Gallons, 4 Pans",
     signOut: "Sign Out App",
     prepRecipes: "Prep Recipes",
-    lineBuilds: "Line Builds"
+    lineBuilds: "Line Builds",
+    prepTime: "Time to Make",
+    prepTimePlaceholder: "e.g., 5 mins, 1 hr",
+    cqp: "Critical Quality Points",
+    cqpPlaceholder: "e.g., Make sure bread is toasted..."
   },
   es: {
     searchPlaceholder: "Buscar recetas...",
@@ -170,7 +175,11 @@ const TRANSLATIONS = {
     yieldPlaceholder: "ej., 2 Galones, 4 Bandejas",
     signOut: "Cerrar Sesión",
     prepRecipes: "Recetas de Prep",
-    lineBuilds: "Montaje de Línea"
+    lineBuilds: "Montaje de Línea",
+    prepTime: "Tiempo de Prep",
+    prepTimePlaceholder: "ej., 5 min, 1 hr",
+    cqp: "Puntos Críticos de Calidad",
+    cqpPlaceholder: "ej., Asegúrese de que el pan esté tostado..."
   }
 };
 
@@ -225,6 +234,9 @@ export default function KitchenApp() {
     instructionsEs: '',
     yield: '',
     shelfLife: '',
+    prepTime: '',
+    cqpEn: '',
+    cqpEs: '',
     allergens: [],
     imageUrl: ''
   });
@@ -402,6 +414,9 @@ export default function KitchenApp() {
         instructions: formData.instructionsEn, 
         yield: formData.yield || '',
         shelfLife: formData.shelfLife || '',
+        prepTime: formData.prepTime || '',
+        cqpEn: formData.cqpEn || '',
+        cqpEs: formData.cqpEs || '',
         allergens: formData.allergens || [],
         imageUrl: finalImageUrl || '',
         updatedAt: new Date()
@@ -471,7 +486,7 @@ export default function KitchenApp() {
     setImageFile(null);
     setFormData({
       title: '', type: viewType, categories: [categories[0]], ingredientsEn: '', instructionsEn: '',
-      ingredientsEs: '', instructionsEs: '', yield: '', shelfLife: '', allergens: [], imageUrl: ''
+      ingredientsEs: '', instructionsEs: '', yield: '', shelfLife: '', prepTime: '', cqpEn: '', cqpEs: '', allergens: [], imageUrl: ''
     });
     setShowAddModal(true);
   };
@@ -484,7 +499,7 @@ export default function KitchenApp() {
       title: recipe.title, type: recipe.type || 'prep', categories: recipe.categories || [recipe.category] || [],
       ingredientsEn: recipe.ingredientsEn || recipe.ingredients || '', instructionsEn: recipe.instructionsEn || recipe.instructions || '', 
       ingredientsEs: recipe.ingredientsEs || '', instructionsEs: recipe.instructionsEs || '',
-      yield: recipe.yield || '', shelfLife: recipe.shelfLife || '', allergens: recipe.allergens || [], imageUrl: recipe.imageUrl || ''
+      yield: recipe.yield || '', shelfLife: recipe.shelfLife || '', prepTime: recipe.prepTime || '', cqpEn: recipe.cqpEn || '', cqpEs: recipe.cqpEs || '', allergens: recipe.allergens || [], imageUrl: recipe.imageUrl || ''
     });
     setShowAddModal(true);
   };
@@ -527,11 +542,13 @@ export default function KitchenApp() {
       return {
         ing: recipe.ingredientsEs || recipe.ingredientsEn || recipe.ingredients || t.missingTrans,
         inst: recipe.instructionsEs || recipe.instructionsEn || recipe.instructions || t.missingTrans,
+        cqp: recipe.cqpEs || recipe.cqpEn || recipe.cqp || "",
       };
     }
     return {
       ing: recipe.ingredientsEn || recipe.ingredients || "",
       inst: recipe.instructionsEn || recipe.instructions || "",
+      cqp: recipe.cqpEn || recipe.cqp || "",
     };
   };
 
@@ -706,6 +723,12 @@ export default function KitchenApp() {
                       
                       {/* Meta Info Bar */}
                       <div className="flex flex-wrap gap-3 mt-4">
+                        {selectedRecipe.prepTime && (
+                          <div className="flex items-center gap-2 bg-white/20 px-3 py-1.5 rounded-lg backdrop-blur-sm">
+                            <Timer size={18} />
+                            <span className="font-bold text-sm">{t.prepTime}: {selectedRecipe.prepTime}</span>
+                          </div>
+                        )}
                         {selectedRecipe.yield && (
                           <div className="flex items-center gap-2 bg-white/20 px-3 py-1.5 rounded-lg backdrop-blur-sm">
                             <Scale size={18} />
@@ -744,6 +767,16 @@ export default function KitchenApp() {
               </div>
 
               <div className="grid md:grid-cols-12 gap-0">
+                {selectedRecipe.type === 'build' && getDisplayContent(selectedRecipe).cqp && (
+                  <div className="md:col-span-12 p-6 md:p-8 bg-orange-50 border-b border-orange-100">
+                    <h3 className="text-lg font-bold text-orange-600 uppercase tracking-widest mb-3 flex items-center gap-2">
+                      <AlertTriangle size={20} /> {t.cqp}
+                    </h3>
+                    <div className="prose prose-lg prose-orange whitespace-pre-line text-orange-900 font-medium leading-relaxed">
+                      {getDisplayContent(selectedRecipe).cqp}
+                    </div>
+                  </div>
+                )}
                 <div className="md:col-span-4 bg-slate-50 p-6 md:p-8 border-r border-slate-200">
                   <h3 className="text-xl font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                     {t.ingredients}
@@ -1018,8 +1051,8 @@ export default function KitchenApp() {
                 </div>
               </div>
 
-              {/* Yield & Shelf Life */}
-              <div className="grid grid-cols-2 gap-4">
+              {/* Yield & Shelf Life & Prep Time */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                  <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.yield}</label>
                     <input type="text" placeholder={t.yieldPlaceholder} value={formData.yield} onChange={e => setFormData({...formData, yield: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
@@ -1027,6 +1060,10 @@ export default function KitchenApp() {
                  <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.shelfLife}</label>
                     <input type="text" placeholder={t.shelfLifePlaceholder} value={formData.shelfLife} onChange={e => setFormData({...formData, shelfLife: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
+                 </div>
+                 <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.prepTime}</label>
+                    <input type="text" placeholder={t.prepTimePlaceholder} value={formData.prepTime} onChange={e => setFormData({...formData, prepTime: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg" />
                  </div>
               </div>
 
@@ -1059,13 +1096,37 @@ export default function KitchenApp() {
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
                 {editTab === 'en' ? (
                   <div className="space-y-4">
-                    <textarea value={formData.ingredientsEn} onChange={e => setFormData({...formData, ingredientsEn: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg h-32 font-mono text-sm" placeholder="Paste English ingredients..." />
-                    <textarea value={formData.instructionsEn} onChange={e => setFormData({...formData, instructionsEn: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg h-32 font-mono text-sm" placeholder="Paste English instructions..." />
+                    {formData.type === 'build' && (
+                       <div>
+                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.cqp} (EN)</label>
+                         <textarea value={formData.cqpEn} onChange={e => setFormData({...formData, cqpEn: e.target.value})} className="w-full p-3 border border-orange-200 bg-orange-50/50 rounded-lg h-20 font-mono text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none" placeholder={t.cqpPlaceholder} />
+                       </div>
+                    )}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.pasteIngredients} (EN)</label>
+                      <textarea value={formData.ingredientsEn} onChange={e => setFormData({...formData, ingredientsEn: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg h-32 font-mono text-sm" placeholder="Paste English ingredients..." />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.pasteInstructions} (EN)</label>
+                      <textarea value={formData.instructionsEn} onChange={e => setFormData({...formData, instructionsEn: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg h-32 font-mono text-sm" placeholder="Paste English instructions..." />
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    <textarea value={formData.ingredientsEs} onChange={e => setFormData({...formData, ingredientsEs: e.target.value})} className="w-full p-3 border border-blue-200 bg-blue-50/50 rounded-lg h-32 font-mono text-sm" placeholder="Pegar ingredientes en Español..." />
-                    <textarea value={formData.instructionsEs} onChange={e => setFormData({...formData, instructionsEs: e.target.value})} className="w-full p-3 border border-blue-200 bg-blue-50/50 rounded-lg h-32 font-mono text-sm" placeholder="Pegar instrucciones en Español..." />
+                    {formData.type === 'build' && (
+                       <div>
+                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.cqp} (ES)</label>
+                         <textarea value={formData.cqpEs} onChange={e => setFormData({...formData, cqpEs: e.target.value})} className="w-full p-3 border border-orange-200 bg-orange-50/50 rounded-lg h-20 font-mono text-sm focus:ring-2 focus:ring-orange-500 focus:outline-none" placeholder={t.cqpPlaceholder} />
+                       </div>
+                    )}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.pasteIngredients} (ES)</label>
+                      <textarea value={formData.ingredientsEs} onChange={e => setFormData({...formData, ingredientsEs: e.target.value})} className="w-full p-3 border border-blue-200 bg-blue-50/50 rounded-lg h-32 font-mono text-sm" placeholder="Pegar ingredientes en Español..." />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.pasteInstructions} (ES)</label>
+                      <textarea value={formData.instructionsEs} onChange={e => setFormData({...formData, instructionsEs: e.target.value})} className="w-full p-3 border border-blue-200 bg-blue-50/50 rounded-lg h-32 font-mono text-sm" placeholder="Pegar instrucciones en Español..." />
+                    </div>
                   </div>
                 )}
               </div>
