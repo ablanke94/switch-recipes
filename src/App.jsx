@@ -14,8 +14,10 @@ import {
 } from 'firebase/firestore';
 import { 
   getAuth, 
-  signInAnonymously, 
-  onAuthStateChanged 
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+  signInWithCustomToken
 } from 'firebase/auth';
 import { 
   getStorage, 
@@ -41,28 +43,22 @@ import {
   AlertTriangle,
   Clock,
   Scale,
-  Calendar,
+  LogOut,
   Check
 } from 'lucide-react';
 
 // --- FIREBASE SETUP ---
-
-// Helper function to safely get environment variables
 const getEnv = (key) => {
   let value = '';
   try {
     // eslint-disable-next-line no-undef
-    if (import.meta && import.meta.env && import.meta.env[key]) {
-      value = import.meta.env[key];
-    }
+    if (import.meta && import.meta.env && import.meta.env[key]) value = import.meta.env[key];
   } catch (e) { /* ignore */ }
 
   if (!value) {
     try {
       // eslint-disable-next-line no-undef
-      if (typeof process !== 'undefined' && process.env && process.env[key]) {
-        value = process.env[key];
-      }
+      if (typeof process !== 'undefined' && process.env && process.env[key]) value = process.env[key];
     } catch (e) { /* ignore */ }
   }
   return value;
@@ -130,7 +126,8 @@ const TRANSLATIONS = {
     madeToday: "Made Today?",
     goodUntil: "Good Until:",
     shelfLifePlaceholder: "e.g., 5 days, 1 week",
-    yieldPlaceholder: "e.g., 2 Gallons, 4 Pans"
+    yieldPlaceholder: "e.g., 2 Gallons, 4 Pans",
+    signOut: "Sign Out App"
   },
   es: {
     searchPlaceholder: "Buscar recetas...",
@@ -166,15 +163,12 @@ const TRANSLATIONS = {
     madeToday: "¿Hecho Hoy?",
     goodUntil: "Bueno Hasta:",
     shelfLifePlaceholder: "ej., 5 días, 1 semana",
-    yieldPlaceholder: "ej., 2 Galones, 4 Bandejas"
+    yieldPlaceholder: "ej., 2 Galones, 4 Bandejas",
+    signOut: "Cerrar Sesión"
   }
 };
 
-// --- BULK ADD TAGS HERE ---
-// You can add more items to this list. 
-// If your database already has a list saved, the database version will take priority.
 const DEFAULT_CATEGORIES = ["Sauce", "Meat", "Side", "Dessert", "Prep", "Appetizer", "Special"];
-
 const ALLERGEN_LIST = [
   { id: 'gluten', label: 'Gluten', icon: '🍞' },
   { id: 'dairy', label: 'Dairy', icon: '🥛' },
@@ -186,6 +180,7 @@ const ALLERGEN_LIST = [
 
 export default function KitchenApp() {
   const [user, setUser] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [recipes, setRecipes] = useState([]);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   
@@ -195,6 +190,12 @@ export default function KitchenApp() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   
+  // Login State
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
   // Admin State
   const [isAdmin, setIsAdmin] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -209,7 +210,7 @@ export default function KitchenApp() {
   const [editTab, setEditTab] = useState('en');
   const [formData, setFormData] = useState({
     title: '',
-    categories: [], // Changed from single category to array
+    categories: [], 
     ingredientsEn: '',
     instructionsEn: '',
     ingredientsEs: '',
@@ -230,46 +231,74 @@ export default function KitchenApp() {
 
   const t = TRANSLATIONS[language];
 
-  // --- AUTH ---
+  // --- AUTH SETUP ---
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+      setIsAuthReady(true);
+      return;
+    }
+
     const initAuth = async () => {
-       await signInAnonymously(auth);
+      try {
+        // This is a safety fallback for specific preview environments
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        }
+      } catch (e) {
+        console.warn("Custom token bypass skipped.");
+      }
     };
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (u) => setUser(u));
+
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsAuthReady(true); // Don't show login screen until we verify if they are already logged in
+    });
     return () => unsubscribe();
   }, []);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    setIsLoggingIn(true);
+    try {
+      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      // Success! The onAuthStateChanged listener will auto-update the user state
+    } catch (err) {
+      console.error(err);
+      setLoginError('Invalid email or password.');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (window.confirm("Are you sure you want to sign out of the kitchen display?")) {
+      await signOut(auth);
+      setIsAdmin(false);
+      setSelectedRecipe(null);
+    }
+  };
 
   // --- DATA SYNC ---
   useEffect(() => {
     if (!user || !db) return;
 
-    // 1. Fetch Recipes
-    // We fetch all and sort client-side to avoid complex Firestore indexing issues with multiple filters
+    // Fetch Recipes
     const qRecipes = query(collection(db, 'artifacts', appId, 'public', 'data', 'recipes'));
-    
     const unsubRecipes = onSnapshot(qRecipes, (snapshot) => {
       const data = snapshot.docs.map(doc => {
         const d = doc.data();
-        // Normalize categories: Ensure it's always an array
         let normCats = [];
-        if (Array.isArray(d.categories)) {
-          normCats = d.categories;
-        } else if (d.category) {
-          // Backward compatibility for old single-string category
-          normCats = [d.category];
-        }
+        if (Array.isArray(d.categories)) normCats = d.categories;
+        else if (d.category) normCats = [d.category];
         return { id: doc.id, ...d, categories: normCats };
       });
-
-      // Alphabetical Sort by Title
       data.sort((a, b) => a.title.localeCompare(b.title));
-      
       setRecipes(data);
     }, (error) => console.error("Error fetching recipes:", error));
 
-    // 2. Fetch Categories
+    // Fetch Categories
     const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'categories');
     const unsubCategories = onSnapshot(settingsRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -296,9 +325,7 @@ export default function KitchenApp() {
       setWakeLock(lock);
       lock.addEventListener('release', () => setWakeLock(null));
     } catch (err) { 
-      if (err.name === 'NotAllowedError') {
-        setWakeLockSupported(false);
-      }
+      if (err.name === 'NotAllowedError') setWakeLockSupported(false);
     }
   };
 
@@ -327,7 +354,6 @@ export default function KitchenApp() {
   };
 
   // --- ACTIONS ---
-
   const handleAdminLogin = () => {
     if (pinInput === '1234') { 
       setIsAdmin(true);
@@ -352,19 +378,15 @@ export default function KitchenApp() {
 
     try {
       let finalImageUrl = formData.imageUrl;
-      if (imageFile) {
-        finalImageUrl = await uploadImage(imageFile);
-      }
+      if (imageFile) finalImageUrl = await uploadImage(imageFile);
 
       const collectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'recipes');
-      
-      // Ensure we have at least one category, or default to first available
       const catsToSave = formData.categories.length > 0 ? formData.categories : [categories[0]];
 
       const dataToSave = {
         title: formData.title,
         categories: catsToSave,
-        category: catsToSave[0], // Legacy fallback for any old listeners
+        category: catsToSave[0], 
         ingredientsEn: formData.ingredientsEn,
         instructionsEn: formData.instructionsEn,
         ingredientsEs: formData.ingredientsEs,
@@ -441,16 +463,8 @@ export default function KitchenApp() {
     setEditTab('en');
     setImageFile(null);
     setFormData({
-      title: '',
-      categories: [categories[0]], // Default to first category
-      ingredientsEn: '',
-      instructionsEn: '',
-      ingredientsEs: '',
-      instructionsEs: '',
-      yield: '',
-      shelfLife: '',
-      allergens: [],
-      imageUrl: ''
+      title: '', categories: [categories[0]], ingredientsEn: '', instructionsEn: '',
+      ingredientsEs: '', instructionsEs: '', yield: '', shelfLife: '', allergens: [], imageUrl: ''
     });
     setShowAddModal(true);
   };
@@ -460,16 +474,10 @@ export default function KitchenApp() {
     setEditTab('en');
     setImageFile(null);
     setFormData({ 
-      title: recipe.title, 
-      categories: recipe.categories || [recipe.category] || [],
-      ingredientsEn: recipe.ingredientsEn || recipe.ingredients || '', 
-      instructionsEn: recipe.instructionsEn || recipe.instructions || '', 
-      ingredientsEs: recipe.ingredientsEs || '', 
-      instructionsEs: recipe.instructionsEs || '',
-      yield: recipe.yield || '',
-      shelfLife: recipe.shelfLife || '',
-      allergens: recipe.allergens || [],
-      imageUrl: recipe.imageUrl || ''
+      title: recipe.title, categories: recipe.categories || [recipe.category] || [],
+      ingredientsEn: recipe.ingredientsEn || recipe.ingredients || '', instructionsEn: recipe.instructionsEn || recipe.instructions || '', 
+      ingredientsEs: recipe.ingredientsEs || '', instructionsEs: recipe.instructionsEs || '',
+      yield: recipe.yield || '', shelfLife: recipe.shelfLife || '', allergens: recipe.allergens || [], imageUrl: recipe.imageUrl || ''
     });
     setShowAddModal(true);
   };
@@ -491,7 +499,6 @@ export default function KitchenApp() {
     setFormData(prev => {
       const current = prev.categories || [];
       if (current.includes(cat)) {
-        // Prevent removing the last category (optional, but good for data integrity)
         if (current.length === 1) return prev; 
         return { ...prev, categories: current.filter(c => c !== cat) };
       } else {
@@ -503,12 +510,7 @@ export default function KitchenApp() {
   // --- RENDER HELPERS ---
   const filteredRecipes = recipes.filter(r => {
     const matchesSearch = r.title.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    // Multi-tag filtering logic:
-    // If "All", show everything.
-    // If a specific category is selected, show recipe if that category is in its list.
     const matchesCategory = selectedCategory === 'All' || (r.categories && r.categories.includes(selectedCategory));
-    
     return matchesSearch && matchesCategory;
   });
 
@@ -525,6 +527,7 @@ export default function KitchenApp() {
     };
   };
 
+  // --- RENDER: SETUP REQUIRED ---
   if (!db) {
       return (
           <div className="flex flex-col items-center justify-center h-screen bg-slate-50 p-6 text-center">
@@ -535,22 +538,75 @@ export default function KitchenApp() {
                   <br/>
                   If you are seeing this on <b>Vercel</b>, please go to Settings &rarr; Environment Variables and add your keys.
               </p>
-              
-              <div className="w-full max-w-sm bg-slate-100 p-4 rounded-lg text-left text-xs font-mono border border-slate-300">
-                <p className="font-bold border-b border-slate-300 pb-2 mb-2">Debug Info (Are keys found?)</p>
-                <div className="space-y-1">
-                  <p>API_KEY: {firebaseConfig.apiKey ? "✅ Yes" : "❌ No"}</p>
-                  <p>AUTH_DOMAIN: {firebaseConfig.authDomain ? "✅ Yes" : "❌ No"}</p>
-                  <p>PROJECT_ID: {firebaseConfig.projectId ? "✅ Yes" : "❌ No"}</p>
-                  <p>STORAGE: {firebaseConfig.storageBucket ? "✅ Yes" : "❌ No"}</p>
-                  <p>SENDER_ID: {firebaseConfig.messagingSenderId ? "✅ Yes" : "❌ No"}</p>
-                  <p>APP_ID: {firebaseConfig.appId ? "✅ Yes" : "❌ No"}</p>
-                </div>
-              </div>
           </div>
       );
   }
 
+  // --- RENDER: LOADING AUTH ---
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
+        <ChefHat className="h-12 w-12 text-orange-400 animate-pulse" />
+      </div>
+    );
+  }
+
+  // --- RENDER: LOGIN SCREEN ---
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md text-slate-800">
+          <div className="flex flex-col items-center mb-8">
+            <div className="bg-orange-100 p-4 rounded-full mb-4">
+              <ChefHat className="h-12 w-12 text-orange-500" />
+            </div>
+            <h1 className="text-2xl font-black text-slate-900">The Switch Recipes</h1>
+            <p className="text-slate-500 text-sm">Kitchen Display Login</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            {loginError && (
+              <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-bold border border-red-200 text-center">
+                {loginError}
+              </div>
+            )}
+            
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label>
+              <input 
+                type="email" 
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                required
+              />
+            </div>
+            
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Password</label>
+              <input 
+                type="password" 
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                required
+              />
+            </div>
+
+            <button 
+              type="submit" 
+              disabled={isLoggingIn}
+              className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 px-4 rounded-lg shadow transition disabled:opacity-70"
+            >
+              {isLoggingIn ? "Logging in..." : "Access Kitchen System"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // --- RENDER: MAIN APP ---
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 w-full">
       
@@ -575,12 +631,11 @@ export default function KitchenApp() {
             </button>
             {isAdmin ? (
               <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => setShowTagModal(true)}
-                  className="bg-slate-800 p-2 rounded-full hover:bg-slate-700 text-slate-300 transition"
-                  title={t.manageTags}
-                >
+                <button onClick={() => setShowTagModal(true)} className="bg-slate-800 p-2 rounded-full hover:bg-slate-700 text-slate-300 transition" title={t.manageTags}>
                   <Tag size={16} />
+                </button>
+                <button onClick={handleSignOut} className="bg-red-900 text-red-100 p-2 rounded-full hover:bg-red-800 transition" title={t.signOut}>
+                  <LogOut size={16} />
                 </button>
                 <button onClick={() => setIsAdmin(false)} className="bg-green-600 px-3 py-1.5 rounded-full text-sm font-bold shadow hover:bg-green-500 flex items-center gap-2">
                   <Unlock size={16} />
